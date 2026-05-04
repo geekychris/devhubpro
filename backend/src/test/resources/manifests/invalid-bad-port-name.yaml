@@ -1,0 +1,11 @@
+apiVersion: devportal.io/v1
+kind: Asset
+metadata:
+  id: bad-port-asset
+  name: Bad Port Asset
+spec:
+  type: service
+  runtime:
+    ports:
+      - name: HTTP_PORT
+        protocol: tcp

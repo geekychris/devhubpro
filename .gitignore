@@ -1,0 +1,32 @@
+# JVM / Gradle
+.gradle/
+build/
+out/
+*.class
+hs_err_pid*
+.kotlin/
+
+# Node
+node_modules/
+dist/
+.pnpm-store/
+.vite/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.local
+*.pem
+
+# Local data
+.devportal/
+postgres-data/

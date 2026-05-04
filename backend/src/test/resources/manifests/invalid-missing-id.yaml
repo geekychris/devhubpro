@@ -1,0 +1,6 @@
+apiVersion: devportal.io/v1
+kind: Asset
+metadata:
+  name: Anonymous Asset
+spec:
+  type: library

@@ -1,0 +1,59 @@
+spring:
+  application:
+    name: devportal
+  datasource:
+    url: jdbc:postgresql://${DEVPORTAL_DB_HOST:localhost}:${DEVPORTAL_DB_PORT:5432}/${DEVPORTAL_DB_NAME:devportal}
+    username: ${DEVPORTAL_DB_USER:devportal}
+    password: ${DEVPORTAL_DB_PASSWORD:devportal}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+server:
+  port: 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+devportal:
+  github:
+    token: ${GITHUB_TOKEN:}
+  workspace:
+    dir: ${DEVPORTAL_WORKSPACE_DIR:${user.home}/.devportal/workspace}
+  state:
+    repo: ${DEVPORTAL_STATE_REPO:${user.home}/.devportal/state}
+  ports:
+    local:
+      start: 18000
+      end:   18999
+    k8s-nodeport:
+      start: 30000
+      end:   32767
+  k8s:
+    monitoring-base-url: ""    # e.g. https://grafana.internal/d/asset-overview?var-asset=
+    namespace: default
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+logging:
+  level:
+    io.devportal: DEBUG
+    org.flywaydb: INFO

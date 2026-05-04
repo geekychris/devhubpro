@@ -1,0 +1,29 @@
+apiVersion: devportal.io/v1
+kind: Asset
+metadata:
+  id: hitorro-core
+  name: Hitorro Core
+  description: Core utilities for the Hitorro platform.
+  owner: geekychris
+  tags: [java, library]
+spec:
+  type: library
+  language: java
+  build:
+    tool: maven
+    commands:
+      install: mvn -DskipTests install
+      test: mvn test
+      package: mvn package
+  docker:
+    enabled: false
+  kubernetes:
+    enabled: false
+  runtime:
+    ports: []
+  dependencies:
+    - id: hitorro-util
+      versionRef: main
+  docs:
+    architecture: docs/ARCHITECTURE.md
+    build: docs/BUILD.md
