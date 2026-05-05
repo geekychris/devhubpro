@@ -12,8 +12,9 @@ import { AssetOverview } from '../components/AssetOverview';
 import { DocsTab } from '../components/DocsTab';
 import { AskClaudeButton } from '../components/AskClaudeButton';
 import { ClusterTab } from '../components/ClusterTab';
+import { ChangesTab } from '../components/ChangesTab';
 
-type Tab = 'overview' | 'dependencies' | 'graph' | 'builds' | 'runtime' | 'cluster' | 'analyze' | 'docs' | 'panels';
+type Tab = 'overview' | 'dependencies' | 'graph' | 'builds' | 'runtime' | 'cluster' | 'analyze' | 'changes' | 'docs' | 'panels';
 
 export function AssetDetailPage() {
   const { id = '' } = useParams();
@@ -29,7 +30,7 @@ export function AssetDetailPage() {
       if (
         detail === 'overview' || detail === 'dependencies' || detail === 'graph' ||
         detail === 'builds' || detail === 'runtime' || detail === 'cluster' ||
-        detail === 'analyze' || detail === 'docs' || detail === 'panels'
+        detail === 'analyze' || detail === 'changes' || detail === 'docs' || detail === 'panels'
       ) {
         setTab(detail);
       }
@@ -124,7 +125,7 @@ export function AssetDetailPage() {
       {editing && <EditAssetForm asset={a} onClose={() => setEditing(false)} />}
 
       <nav className="flex gap-4 border-b border-gray-200 text-sm">
-        {(['overview', 'dependencies', 'graph', 'builds', 'runtime', 'cluster', 'analyze', 'docs', 'panels'] as const).map((t) => (
+        {(['overview', 'dependencies', 'graph', 'builds', 'runtime', 'cluster', 'analyze', 'changes', 'docs', 'panels'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -273,6 +274,7 @@ export function AssetDetailPage() {
       {tab === 'runtime' && <RuntimeTab assetId={id} />}
       {tab === 'cluster' && <ClusterTab assetId={id} />}
       {tab === 'analyze' && <AnalyzeTab assetId={id} />}
+      {tab === 'changes' && <ChangesTab assetId={id} />}
       {tab === 'docs' && <DocsTab assetId={id} />}
       {tab === 'panels' && <PanelsTab assetId={id} />}
     </div>

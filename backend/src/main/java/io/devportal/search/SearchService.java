@@ -47,33 +47,39 @@ public class SearchService {
     }
 
     public SearchResult search(String query, boolean includeDocs) {
-        if (query == null || query.isBlank()) {
+        SearchQuery sq = SearchQuery.parse(query);
+        if (sq.isEmpty()) {
             return new SearchResult(query, List.of(), List.of());
         }
-        String like = "%" + query + "%";
-        // Asset side: ILIKE across many text fields, plus tags array.
-        List<Asset> matched = jdbc.sql("""
-            SELECT * FROM asset WHERE
-              id ILIKE :q OR name ILIKE :q OR coalesce(description,'') ILIKE :q
-              OR coalesce(owner,'') ILIKE :q OR coalesce(language,'') ILIKE :q
-              OR coalesce(repo_url,'') ILIKE :q
-              OR EXISTS (SELECT 1 FROM unnest(tags) t WHERE t ILIKE :q)
-            ORDER BY id
-            LIMIT 100
-            """)
-            .param("q", like)
-            .query((rs, n) -> assetFromRow(rs))
-            .list();
+        // Asset side: per-term predicate combined with AND/OR depending on the parsed query.
+        StringBuilder sql = new StringBuilder("SELECT * FROM asset WHERE (");
+        for (int i = 0; i < sq.terms().size(); i++) {
+            if (i > 0) sql.append(sq.and() ? " AND " : " OR ");
+            String p = ":t" + i;
+            sql.append("(id ILIKE ").append(p)
+               .append(" OR name ILIKE ").append(p)
+               .append(" OR coalesce(description,'') ILIKE ").append(p)
+               .append(" OR coalesce(owner,'') ILIKE ").append(p)
+               .append(" OR coalesce(language,'') ILIKE ").append(p)
+               .append(" OR coalesce(repo_url,'') ILIKE ").append(p)
+               .append(" OR EXISTS (SELECT 1 FROM unnest(tags) tg WHERE tg ILIKE ").append(p).append("))");
+        }
+        sql.append(") ORDER BY favorite DESC, COALESCE(rating, 0) DESC, id LIMIT 100");
+        var spec = jdbc.sql(sql.toString());
+        for (int i = 0; i < sq.terms().size(); i++) {
+            spec = spec.param("t" + i, "%" + sq.terms().get(i) + "%");
+        }
+        List<Asset> matched = spec.query((rs, n) -> assetFromRow(rs)).list();
         List<AssetView> assetViews = matched.stream().map(AssetView::of).toList();
 
-        List<SearchResult.DocHit> docs = includeDocs ? scanDocs(query) : List.of();
+        List<SearchResult.DocHit> docs = includeDocs ? scanDocs(sq) : List.of();
 
         return new SearchResult(query, assetViews, docs);
     }
 
-    private List<SearchResult.DocHit> scanDocs(String query) {
+    private List<SearchResult.DocHit> scanDocs(SearchQuery sq) {
         List<SearchResult.DocHit> hits = new ArrayList<>();
-        String needle = query.toLowerCase(Locale.ROOT);
+        List<String> needles = sq.terms().stream().map(t -> t.toLowerCase(Locale.ROOT)).toList();
         for (Asset a : assets.findAll(null, null, null)) {
             if (hits.size() >= MAX_DOC_HITS) break;
             Path ws = workspace.workspaceFor(a.id());
@@ -94,10 +100,30 @@ public class SearchService {
                         try {
                             String text = Files.readString(file);
                             String lower = text.toLowerCase(Locale.ROOT);
-                            int idx = lower.indexOf(needle);
-                            if (idx < 0) return FileVisitResult.CONTINUE;
-                            int line = countLines(text, idx);
-                            String snippet = snippetAround(text, idx, query.length());
+                            int firstHitIdx = -1;
+                            String hitTerm = null;
+                            if (sq.and()) {
+                                // AND: every term must occur somewhere in the file.
+                                for (String t : needles) {
+                                    int idx = lower.indexOf(t);
+                                    if (idx < 0) return FileVisitResult.CONTINUE;
+                                    if (firstHitIdx < 0 || idx < firstHitIdx) {
+                                        firstHitIdx = idx;
+                                        hitTerm = t;
+                                    }
+                                }
+                            } else {
+                                for (String t : needles) {
+                                    int idx = lower.indexOf(t);
+                                    if (idx >= 0 && (firstHitIdx < 0 || idx < firstHitIdx)) {
+                                        firstHitIdx = idx;
+                                        hitTerm = t;
+                                    }
+                                }
+                                if (firstHitIdx < 0) return FileVisitResult.CONTINUE;
+                            }
+                            int line = countLines(text, firstHitIdx);
+                            String snippet = snippetAround(text, firstHitIdx, hitTerm.length());
                             hits.add(new SearchResult.DocHit(
                                 a.id(),
                                 ws.relativize(file).toString(),
@@ -140,6 +166,7 @@ public class SearchService {
         }
         java.sql.Timestamp c = rs.getTimestamp("created_at");
         java.sql.Timestamp u = rs.getTimestamp("updated_at");
+        Object ratingObj = rs.getObject("rating");
         return new Asset(
             rs.getString("id"),
             rs.getString("name"),
@@ -152,6 +179,8 @@ public class SearchService {
             tags,
             rs.getString("lifecycle"),
             rs.getString("k8s_namespace"),
+            rs.getBoolean("favorite"),
+            ratingObj == null ? null : rs.getInt("rating"),
             c == null ? null : c.toInstant(),
             u == null ? null : u.toInstant()
         );

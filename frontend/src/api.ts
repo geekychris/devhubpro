@@ -10,8 +10,16 @@ export type Asset = {
   tags: string[];
   lifecycle: 'experimental' | 'stable' | 'deprecated';
   k8sNamespace: string | null;
+  favorite: boolean;
+  rating: number | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type TagSummary = {
+  tag: string;
+  usageCount: number;
+  lastUsedAt: string | null;
 };
 
 export type Dependency = {
@@ -107,6 +115,99 @@ export type MonitoringLinks = {
   kubectlLogs: string;
 };
 
+export type BuildProgress = {
+  buildId: number;
+  assetId: string;
+  commandName: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  mode: 'shallow' | 'deep';
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  summary: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    running: number;
+    queued: number;
+    cancelled: number;
+    skipped: number;
+  };
+  summaryText: string | null;
+  children: {
+    id: number;
+    assetId: string;
+    commandName: string;
+    status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+    exitCode: number | null;
+    label: string;
+    startedAt: string | null;
+    finishedAt: string | null;
+    durationMs: number | null;
+    tailLines: string[];
+    errorHint: string | null;
+    logPath: string;
+  }[];
+};
+
+export type K8sDiagnostics = {
+  assetId: string;
+  namespace: string;
+  evaluatedAt: string;
+  summary: {
+    podsTotal: number;
+    podsRunning: number;
+    podsPending: number;
+    podsBroken: number;
+    findingsError: number;
+    findingsWarn: number;
+  };
+  findings: {
+    severity: 'error' | 'warn' | 'info';
+    code: string;
+    resource: string;
+    pod: string | null;
+    image: string | null;
+    message: string;
+    hint: string;
+    logTail: string[];
+    firstSeenAt: string | null;
+    ageSeconds: number | null;
+    restartCount: number | null;
+    lastTransitionAt: string | null;
+  }[];
+};
+
+export type FrontendTier = {
+  relPath: string;
+  framework: 'VITE' | 'CRA' | 'NEXT' | 'VUE_CLI' | 'ANGULAR' | 'GENERIC_REACT';
+  outputDir: string;
+  buildScript: string;
+  hasDockerfile: boolean;
+  packageManager: 'npm' | 'pnpm' | 'yarn';
+};
+
+export type FrontendScaffoldResult = {
+  tierPath: string;
+  dockerfileWritten: boolean;
+  nginxConfWritten: boolean;
+  k8sWritten: boolean;
+  imageTag: string;
+  nodePort: number;
+  filesWritten: string[];
+  message: string;
+};
+
+export type RuntimePlan = {
+  rootId: string;
+  steps: {
+    assetId: string;
+    namespace: string;
+    hasManifests: boolean;
+    isRoot: boolean;
+  }[];
+};
+
 export type AuditFinding = {
   code: string;
   severity: 'info' | 'warn' | 'error';
@@ -192,6 +293,8 @@ export type UpdateAssetBody = Partial<{
   tags: string[];
   lifecycle: string;
   k8sNamespace: string | null;
+  favorite: boolean;
+  rating: number | null;
 }>;
 
 export type GitHubRepoSummary = {
@@ -305,13 +408,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ service: string; status: string; time: string }>('/api/health'),
 
-  listAssets: (q?: string, type?: string, lifecycle?: string) => {
+  listAssets: (
+    q?: string,
+    type?: string,
+    lifecycle?: string,
+    favorite?: boolean
+  ) => {
     const params = new URLSearchParams();
     if (q) params.set('q', q);
     if (type) params.set('type', type);
     if (lifecycle) params.set('lifecycle', lifecycle);
+    if (favorite !== undefined) params.set('favorite', String(favorite));
     const qs = params.toString();
     return request<Asset[]>(`/api/assets${qs ? `?${qs}` : ''}`);
+  },
+
+  listTags: (prefix?: string) => {
+    const qs = prefix ? `?q=${encodeURIComponent(prefix)}` : '';
+    return request<TagSummary[]>(`/api/tags${qs}`);
   },
 
   getAsset: (id: string) => request<Asset>(`/api/assets/${id}`),
@@ -371,6 +485,7 @@ export const api = {
   },
 
   getBuildChain: (id: number) => request<Build[]>(`/api/builds/${id}/chain`),
+  getBuildProgress: (id: number) => request<BuildProgress>(`/api/builds/${id}/progress`),
   recentBuilds: (limit = 50) => request<Build[]>(`/api/builds?limit=${limit}`),
   deleteBuild: (id: number) => request<void>(`/api/builds/${id}`, { method: 'DELETE' }),
 
@@ -413,6 +528,11 @@ export const api = {
   // ---- docker ----
   dockerBuild: (assetId: string) =>
     request<Build>(`/api/assets/${assetId}/docker/build`, { method: 'POST' }),
+  dockerBuildImages: (assetId: string, includeRuntime: boolean) =>
+    request<Build>(
+      `/api/assets/${assetId}/docker/build-images${includeRuntime ? '?include=runtime' : ''}`,
+      { method: 'POST' }
+    ),
   dockerRun: (assetId: string) =>
     request<RunContainerResult>(`/api/assets/${assetId}/docker/run`, { method: 'POST' }),
   dockerContainers: (assetId: string) =>
@@ -427,6 +547,34 @@ export const api = {
     request<Record<string, unknown>>(`/api/assets/${assetId}/k8s`, { method: 'DELETE' }),
   k8sStatus: (assetId: string) => request<K8sStatus>(`/api/assets/${assetId}/k8s/status`),
   k8sLinks: (assetId: string) => request<MonitoringLinks>(`/api/assets/${assetId}/k8s/links`),
+  k8sDiagnostics: (assetId: string) =>
+    request<K8sDiagnostics>(`/api/assets/${assetId}/k8s/diagnostics`),
+
+  // ---- frontend (React/Vite/Next/Vue/Angular) tier scaffolding ----
+  listFrontendTiers: (assetId: string) =>
+    request<FrontendTier[]>(`/api/assets/${assetId}/frontend-tiers`),
+  scaffoldFrontend: (assetId: string, path: string) =>
+    request<FrontendScaffoldResult>(
+      `/api/assets/${assetId}/scaffold-frontend?path=${encodeURIComponent(path)}`,
+      { method: 'POST' }
+    ),
+
+  k8sRuntimePlan: (assetId: string) =>
+    request<RuntimePlan>(`/api/assets/${assetId}/k8s/runtime-plan`),
+  k8sApplyComposite: (assetId: string, skip: string[] = []) => {
+    const qs = skip.length ? `&skip=${skip.map(encodeURIComponent).join(',')}` : '';
+    return request<Record<string, unknown>[]>(
+      `/api/assets/${assetId}/k8s/apply?include=runtime${qs}`,
+      { method: 'POST' }
+    );
+  },
+  k8sDeleteComposite: (assetId: string, skip: string[] = []) => {
+    const qs = skip.length ? `&skip=${skip.map(encodeURIComponent).join(',')}` : '';
+    return request<Record<string, unknown>[]>(
+      `/api/assets/${assetId}/k8s?include=runtime${qs}`,
+      { method: 'DELETE' }
+    );
+  },
 
   endpoints: (assetId: string) =>
     request<{
@@ -650,4 +798,51 @@ export const api = {
       `/api/state/git-sync?message=${encodeURIComponent(message)}`,
       { method: 'POST' }
     ),
+
+  // ---- workspace changes ----
+  getWorkspaceStatus: (id: string) =>
+    request<WorkspaceStatus>(`/api/assets/${id}/workspace/status`),
+  getWorkspaceDiff: async (id: string, path: string) => {
+    const res = await fetch(`/api/assets/${id}/workspace/diff?path=${encodeURIComponent(path)}`);
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+    return res.text();
+  },
+  commitWorkspace: (
+    id: string,
+    body: { branch: string; message: string; paths: string[]; push: boolean }
+  ) =>
+    request<CommitResult>(`/api/assets/${id}/workspace/commit`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  pushWorkspace: (id: string, branch: string) =>
+    request<CommitResult>(
+      `/api/assets/${id}/workspace/push?branch=${encodeURIComponent(branch)}`,
+      { method: 'POST' }
+    ),
+};
+
+export type WorkspaceFileChange = {
+  path: string;
+  status: 'modified' | 'added' | 'deleted' | 'untracked' | 'missing' | 'conflicting';
+};
+
+export type WorkspaceStatus = {
+  assetId: string;
+  branch: string;
+  head: string | null;
+  aheadCount: number;
+  behindCount: number;
+  clean: boolean;
+  files: WorkspaceFileChange[];
+};
+
+export type CommitResult = {
+  assetId: string;
+  branch: string;
+  commit: string | null;
+  filesChanged: string[];
+  pushed: boolean;
+  pushOutput: string | null;
+  prSuggestion: string | null;
 };

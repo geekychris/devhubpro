@@ -32,6 +32,8 @@ public class AssetRepository {
         readStringArray(rs, "tags"),
         rs.getString("lifecycle"),
         rs.getString("k8s_namespace"),
+        rs.getBoolean("favorite"),
+        rs.getObject("rating") == null ? null : rs.getInt("rating"),
         toInstant(rs.getTimestamp("created_at")),
         toInstant(rs.getTimestamp("updated_at"))
     );
@@ -56,44 +58,80 @@ public class AssetRepository {
         rs.getString("kind")
     );
 
-    public List<Asset> findAll(String query, String type, String lifecycle) {
-        boolean hasQuery = query != null && !query.isBlank();
+    public List<Asset> findAll(String query, String type, String lifecycle, Boolean favorite) {
+        io.devportal.search.SearchQuery sq = io.devportal.search.SearchQuery.parse(query);
+        boolean hasTerms = !sq.isEmpty();
 
         StringBuilder sql = new StringBuilder("SELECT * FROM asset WHERE 1=1");
-        if (hasQuery) {
+        if (hasTerms) {
             sql.append(" AND (");
-            sql.append("id ILIKE :q OR name ILIKE :q OR coalesce(description,'') ILIKE :q");
-            sql.append(" OR EXISTS (SELECT 1 FROM unnest(tags) t WHERE t ILIKE :q)");
+            for (int i = 0; i < sq.terms().size(); i++) {
+                if (i > 0) sql.append(sq.and() ? " AND " : " OR ");
+                sql.append(termPredicate(i));
+            }
             sql.append(")");
         }
         if (type != null && !type.isBlank()) sql.append(" AND type = :type");
         if (lifecycle != null && !lifecycle.isBlank()) sql.append(" AND lifecycle = :lifecycle");
+        if (favorite != null) sql.append(" AND favorite = :favorite");
 
-        // Ranking: lower is better. Bias the asset id and name above description/tags.
-        if (hasQuery) {
-            sql.append(" ORDER BY CASE");
-            sql.append(" WHEN id ILIKE :exact THEN 0");
-            sql.append(" WHEN id ILIKE :prefix THEN 1");
-            sql.append(" WHEN name ILIKE :exact THEN 2");
-            sql.append(" WHEN name ILIKE :prefix THEN 3");
-            sql.append(" WHEN id ILIKE :q THEN 4");
-            sql.append(" WHEN name ILIKE :q THEN 5");
-            sql.append(" WHEN EXISTS (SELECT 1 FROM unnest(tags) t WHERE t ILIKE :exact) THEN 6");
-            sql.append(" WHEN coalesce(description,'') ILIKE :q THEN 7");
-            sql.append(" ELSE 8 END, id");
+        // Ranking: favorites and high-rated assets surface first; for queries we bias by best
+        // match across all terms. The "score" expression is a sum of per-term mins (lower=better),
+        // plus negative offsets for favorite/rating so they outrank ties.
+        if (hasTerms) {
+            sql.append(" ORDER BY (");
+            sql.append("CASE WHEN favorite THEN -100 ELSE 0 END");
+            sql.append(" + CASE WHEN rating IS NULL THEN 0 ELSE -rating * 5 END");
+            for (int i = 0; i < sq.terms().size(); i++) {
+                sql.append(" + ").append(termRankCase(i));
+            }
+            sql.append("), id");
         } else {
-            sql.append(" ORDER BY id");
+            // No query: favorites first (desc), then rating desc (nulls last), then id.
+            sql.append(" ORDER BY favorite DESC, COALESCE(rating, 0) DESC, id");
         }
 
         var spec = jdbc.sql(sql.toString());
-        if (hasQuery) {
-            spec = spec.param("q", "%" + query + "%");
-            spec = spec.param("exact", query);
-            spec = spec.param("prefix", query + "%");
+        for (int i = 0; i < sq.terms().size(); i++) {
+            String t = sq.terms().get(i);
+            spec = spec.param("t" + i, "%" + t + "%");
+            spec = spec.param("e" + i, t);
+            spec = spec.param("p" + i, t + "%");
         }
         if (type != null && !type.isBlank()) spec = spec.param("type", type);
         if (lifecycle != null && !lifecycle.isBlank()) spec = spec.param("lifecycle", lifecycle);
+        if (favorite != null) spec = spec.param("favorite", favorite);
         return spec.query(ASSET).list();
+    }
+
+    /** Backwards-compatible overload (no favorite filter). */
+    public List<Asset> findAll(String query, String type, String lifecycle) {
+        return findAll(query, type, lifecycle, null);
+    }
+
+    private static String termPredicate(int i) {
+        String t = ":t" + i;
+        return "(id ILIKE " + t + " OR name ILIKE " + t
+            + " OR coalesce(description,'') ILIKE " + t
+            + " OR coalesce(owner,'') ILIKE " + t
+            + " OR coalesce(language,'') ILIKE " + t
+            + " OR EXISTS (SELECT 1 FROM unnest(tags) tg WHERE tg ILIKE " + t + "))";
+    }
+
+    private static String termRankCase(int i) {
+        String e = ":e" + i;
+        String p = ":p" + i;
+        String t = ":t" + i;
+        return "CASE"
+            + " WHEN id ILIKE " + e + " THEN 0"
+            + " WHEN id ILIKE " + p + " THEN 1"
+            + " WHEN name ILIKE " + e + " THEN 2"
+            + " WHEN name ILIKE " + p + " THEN 3"
+            + " WHEN id ILIKE " + t + " THEN 4"
+            + " WHEN name ILIKE " + t + " THEN 5"
+            + " WHEN EXISTS (SELECT 1 FROM unnest(tags) tg WHERE tg ILIKE " + e + ") THEN 6"
+            + " WHEN coalesce(description,'') ILIKE " + t + " THEN 7"
+            + " ELSE 8 END";
     }
 
     public Optional<Asset> findById(String id) {
@@ -114,9 +152,10 @@ public class AssetRepository {
     public void insert(Asset a) {
         jdbc.sql("""
             INSERT INTO asset (id, name, description, owner, type, language, repo_url,
-                               repo_default_branch, tags, lifecycle, k8s_namespace)
+                               repo_default_branch, tags, lifecycle, k8s_namespace,
+                               favorite, rating)
             VALUES (:id, :name, :description, :owner, :type, :language, :repo_url,
-                    :branch, :tags, :lifecycle, :ns)
+                    :branch, :tags, :lifecycle, :ns, :favorite, :rating)
             """)
             .param("id", a.id())
             .param("name", a.name())
@@ -129,6 +168,8 @@ public class AssetRepository {
             .param("tags", a.tags() == null ? new String[0] : a.tags().toArray(String[]::new))
             .param("lifecycle", a.lifecycle() == null ? "experimental" : a.lifecycle())
             .param("ns", a.k8sNamespace() != null ? a.k8sNamespace() : a.id())
+            .param("favorite", a.favorite())
+            .param("rating", a.rating())
             .update();
     }
 
@@ -144,7 +185,9 @@ public class AssetRepository {
               repo_default_branch = :branch,
               tags = :tags,
               lifecycle = :lifecycle,
-              k8s_namespace = :ns
+              k8s_namespace = :ns,
+              favorite = :favorite,
+              rating = :rating
             WHERE id = :id
             """)
             .param("id", a.id())
@@ -158,6 +201,8 @@ public class AssetRepository {
             .param("tags", a.tags() == null ? new String[0] : a.tags().toArray(String[]::new))
             .param("lifecycle", a.lifecycle())
             .param("ns", a.k8sNamespace())
+            .param("favorite", a.favorite())
+            .param("rating", a.rating())
             .update();
     }
 

@@ -43,7 +43,7 @@
           "type": "object",
           "properties": {
             "tool": {
-              "enum": ["maven", "gradle", "npm", "pnpm", "yarn", "make", "shell", "none"]
+              "enum": ["maven", "gradle", "npm", "pnpm", "yarn", "cargo", "make", "shell", "none"]
             },
             "commands": {
               "type": "object",
@@ -59,7 +59,21 @@
             "enabled": { "type": "boolean" },
             "dockerfile": { "type": "string" },
             "context": { "type": "string" },
-            "image": { "type": "string" }
+            "image": { "type": "string" },
+            "images": {
+              "type": "array",
+              "description": "Multi-image build matrix. Each entry is built via 'docker build -t <tag> -f <dockerfile> <context>' relative to the asset workspace root. Use this for repos that produce multiple local images consumed by k8s manifests with imagePullPolicy: Never.",
+              "items": {
+                "type": "object",
+                "required": ["tag"],
+                "properties": {
+                  "tag": { "type": "string", "description": "Image tag, e.g. worksphere/social-app:latest" },
+                  "dockerfile": { "type": "string", "description": "Repo-relative Dockerfile path. Defaults to <context>/Dockerfile." },
+                  "context": { "type": "string", "description": "Repo-relative build context. Defaults to '.'." }
+                },
+                "additionalProperties": false
+              }
+            }
           },
           "additionalProperties": false
         },

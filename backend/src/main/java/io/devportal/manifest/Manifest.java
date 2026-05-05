@@ -45,7 +45,17 @@ public record Manifest(
         Boolean enabled,
         String dockerfile,
         String context,
-        String image
+        String image,
+        // Multi-image manifests: list of {tag, dockerfile, context} entries to build via the
+        // local-images helper. Used by repos like enterprise-social-platform that produce many
+        // local images consumed by their k8s manifests with imagePullPolicy: Never.
+        List<Image> images
+    ) {}
+
+    public record Image(
+        String tag,
+        String dockerfile,
+        String context
     ) {}
 
     public record Kubernetes(

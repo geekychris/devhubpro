@@ -24,6 +24,21 @@ public class K8sCommitController {
                   + "/k8s/commit-workspace to commit on a branch.");
     }
 
+    /** List React / Vite / Next / Vue / Angular tiers detected in the workspace. */
+    @org.springframework.web.bind.annotation.GetMapping("/api/assets/{id}/frontend-tiers")
+    public java.util.List<FrontendScaffolder.Tier> frontendTiers(@PathVariable String id) throws IOException {
+        return commit.detectFrontendTiers(id);
+    }
+
+    /** Scaffold Dockerfile + nginx.conf + k8s manifest for one detected frontend tier. */
+    @PostMapping("/api/assets/{id}/scaffold-frontend")
+    public FrontendScaffolder.ScaffoldResult scaffoldFrontend(
+        @PathVariable String id,
+        @RequestParam("path") String path
+    ) throws IOException {
+        return commit.scaffoldFrontend(id, path);
+    }
+
     /** Scaffold both Dockerfile and k8s manifests in one call. */
     @PostMapping("/api/assets/{id}/scaffold-runtime")
     public K8sCommitService.ScaffoldFullResult scaffoldFull(@PathVariable String id) throws IOException {

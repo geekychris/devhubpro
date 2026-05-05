@@ -117,7 +117,10 @@ public class K8sService {
                 stream.filter(Files::isRegularFile)
                     .filter(p -> {
                         String n = p.getFileName().toString().toLowerCase();
-                        return n.endsWith(".yaml") || n.endsWith(".yml");
+                        if (!n.endsWith(".yaml") && !n.endsWith(".yml")) return false;
+                        // Skip kustomize inputs — they aren't standalone resources, and
+                        // `kubectl apply -f kustomization.yaml` always errors.
+                        return !n.equals("kustomization.yaml") && !n.equals("kustomization.yml");
                     })
                     .forEach(p -> {
                         Path rel = source.relativize(p);
@@ -160,14 +163,29 @@ public class K8sService {
                               java.util.Map<String, Integer> bySlot) {
         if (doc == null || !doc.isObject()) return;
         if (!"Service".equalsIgnoreCase(doc.path("kind").asText())) return;
+        // NodePort is only valid on type=NodePort or LoadBalancer. Patching it onto a ClusterIP
+        // service makes kubectl reject the manifest with "spec.ports[].nodePort: Forbidden".
+        // ClusterIP is also the default when type is omitted, so we treat both as ClusterIP.
+        String type = doc.path("spec").path("type").asText("ClusterIP");
+        if (!"NodePort".equalsIgnoreCase(type) && !"LoadBalancer".equalsIgnoreCase(type)) return;
+
         com.fasterxml.jackson.databind.JsonNode portsArray = doc.path("spec").path("ports");
         if (!portsArray.isArray()) return;
         for (int i = 0; i < portsArray.size(); i++) {
             com.fasterxml.jackson.databind.node.ObjectNode portNode =
                 (com.fasterxml.jackson.databind.node.ObjectNode) portsArray.get(i);
+            // If the manifest already pinned a nodePort, respect it — never overwrite. Lets users
+            // hardcode different NodePorts on different Services within the same asset.
+            if (portNode.has("nodePort") && !portNode.path("nodePort").isNull()) continue;
             String name = portNode.path("name").asText(null);
+            // Single-allocation fallback applies only when:
+            //   1) the port has no name (so we can't match by slot), and
+            //   2) it's the first port of the Service (i == 0).
+            // Without (1) the renderer used to incorrectly clobber named ports that didn't match
+            // any slot, causing every Service in the asset to get the same nodePort.
             Integer assigned = (name != null && bySlot.containsKey(name)) ? bySlot.get(name)
-                : (bySlot.size() == 1 && i == 0 ? bySlot.values().iterator().next() : null);
+                : (name == null && bySlot.size() == 1 && i == 0
+                    ? bySlot.values().iterator().next() : null);
             if (assigned != null) {
                 portNode.put("nodePort", assigned);
             }
@@ -282,7 +300,7 @@ public class K8sService {
     }
 
     /** Best-effort: ensure the namespace exists. {@code kubectl create ns} returns 0 or AlreadyExists. */
-    private void ensureNamespace(String namespace) throws IOException, InterruptedException {
+    public void ensureNamespace(String namespace) throws IOException, InterruptedException {
         if (namespace == null || namespace.isBlank() || "default".equals(namespace)) return;
         ProcResult check = exec(new String[]{"kubectl", "get", "namespace", namespace, "--no-headers", "--ignore-not-found"});
         if (check.exitCode == 0 && check.output != null && !check.output.trim().isEmpty()) return;

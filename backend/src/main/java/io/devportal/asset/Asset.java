@@ -16,6 +16,8 @@ public record Asset(
     List<String> tags,
     String lifecycle,
     String k8sNamespace,    // nullable; null means "use asset id" or fall through to manifest/default
+    boolean favorite,
+    Integer rating,         // nullable; null = unrated, otherwise 1..5
     Instant createdAt,
     Instant updatedAt
 ) {}

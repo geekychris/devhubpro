@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type DockerContainer } from '../api';
 import { WorkspaceTerminalModal } from './WorkspaceTerminal';
+import { ChainProgress } from './ChainProgress';
+import { DiagnosticsCard } from './DiagnosticsCard';
+import { FrontendTiersCard } from './FrontendTiersCard';
 
 export function RuntimeTab({ assetId }: { assetId: string }) {
   const queryClient = useQueryClient();
@@ -39,6 +42,9 @@ export function RuntimeTab({ assetId }: { assetId: string }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ports', assetId] }),
   });
   const dockerBuild = useMutation({ mutationFn: () => api.dockerBuild(assetId) });
+  const dockerBuildImages = useMutation({
+    mutationFn: (includeRuntime: boolean) => api.dockerBuildImages(assetId, includeRuntime),
+  });
   const dockerRun = useMutation({
     mutationFn: () => api.dockerRun(assetId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['docker-containers', assetId] }),
@@ -142,8 +148,25 @@ export function RuntimeTab({ assetId }: { assetId: string }) {
               onClick={() => dockerBuild.mutate()}
               className="rounded bg-blue-600 px-2 py-1 text-white hover:bg-blue-700"
               disabled={dockerBuild.isPending}
+              title="Build the single Dockerfile referenced by spec.docker (or workspace root)"
             >
               Build image
+            </button>
+            <button
+              onClick={() => dockerBuildImages.mutate(false)}
+              className="rounded bg-indigo-600 px-2 py-1 text-white hover:bg-indigo-700"
+              disabled={dockerBuildImages.isPending}
+              title="Build every entry under spec.docker.images for this asset"
+            >
+              {dockerBuildImages.isPending ? 'Building images…' : 'Build local images'}
+            </button>
+            <button
+              onClick={() => dockerBuildImages.mutate(true)}
+              className="rounded border border-indigo-300 px-2 py-1 text-indigo-700 hover:bg-indigo-50"
+              disabled={dockerBuildImages.isPending}
+              title="Same as 'Build local images' but also builds images declared by runtime-edge producers"
+            >
+              + dependents
             </button>
             <button
               onClick={() => dockerRun.mutate()}
@@ -164,6 +187,14 @@ export function RuntimeTab({ assetId }: { assetId: string }) {
             Build kicked: #{dockerBuild.data.id} — see Builds tab for live log.
           </p>
         )}
+        {dockerBuildImages.data && (
+          <div className="mb-2">
+            <ChainProgress buildId={dockerBuildImages.data.id} title="build-images" />
+          </div>
+        )}
+        {dockerBuildImages.error && (
+          <p className="mb-2 text-sm text-red-600">{(dockerBuildImages.error as Error).message}</p>
+        )}
         {containers.data && containers.data.length === 0 ? (
           <p className="text-sm text-gray-500">No containers.</p>
         ) : containers.data ? (
@@ -173,6 +204,12 @@ export function RuntimeTab({ assetId }: { assetId: string }) {
 
       {/* K8s */}
       <K8sSection assetId={assetId} k8sStatusData={k8sStatus.data} k8sLinksData={k8sLinks.data} />
+
+      {/* Detected frontend tiers (React/Vite/Next/Vue/Angular) — scaffold Dockerfile + k8s on demand */}
+      <FrontendTiersCard assetId={assetId} />
+
+      {/* K8s diagnostics */}
+      <DiagnosticsCard assetId={assetId} />
 
       {/* Port forwards */}
       <PortForwardsCard assetId={assetId} />
@@ -396,21 +433,42 @@ function K8sSection({
   k8sLinksData: { k9s: string; grafana: string | null; kubectlLogs: string } | undefined;
 }) {
   const queryClient = useQueryClient();
+  const runtimePlan = useQuery({
+    queryKey: ['k8s-runtime-plan', assetId],
+    queryFn: () => api.k8sRuntimePlan(assetId),
+    retry: false,
+  });
+  // Producers in the runtime closure (excludes the root). When non-empty, the UI shows the
+  // composite-apply panel.
+  const runtimeProducers = runtimePlan.data?.steps.filter((s) => !s.isRoot) ?? [];
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const toggleSkip = (id: string) =>
+    setSkipped((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  const invalidateK8s = () => {
+    queryClient.invalidateQueries({ queryKey: ['k8s-status', assetId] });
+    queryClient.invalidateQueries({ queryKey: ['k8s-pods', assetId] });
+    queryClient.invalidateQueries({ queryKey: ['endpoints', assetId] });
+    queryClient.invalidateQueries({ queryKey: ['k8s-runtime-plan', assetId] });
+  };
   const apply = useMutation({
     mutationFn: () => api.k8sApply(assetId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['k8s-status', assetId] });
-      queryClient.invalidateQueries({ queryKey: ['k8s-pods', assetId] });
-      queryClient.invalidateQueries({ queryKey: ['endpoints', assetId] });
-    },
+    onSuccess: invalidateK8s,
   });
   const k8sDelete = useMutation({
     mutationFn: () => api.k8sDelete(assetId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['k8s-status', assetId] });
-      queryClient.invalidateQueries({ queryKey: ['k8s-pods', assetId] });
-      queryClient.invalidateQueries({ queryKey: ['endpoints', assetId] });
-    },
+    onSuccess: invalidateK8s,
+  });
+  const applyComposite = useMutation({
+    mutationFn: () => api.k8sApplyComposite(assetId, Array.from(skipped)),
+    onSuccess: invalidateK8s,
+  });
+  const deleteComposite = useMutation({
+    mutationFn: () => api.k8sDeleteComposite(assetId, Array.from(skipped)),
+    onSuccess: invalidateK8s,
   });
 
   const scaffold = useMutation({
@@ -508,6 +566,75 @@ function K8sSection({
         </div>
       )}
       {render.error && <p className="mb-2 text-sm text-red-600">{(render.error as Error).message}</p>}
+
+      {runtimeProducers.length > 0 && (
+        <div className="mb-3 rounded border border-blue-200 bg-blue-50/40 p-3 text-sm">
+          <header className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm font-medium text-gray-900">
+              Bring up dependent services ({runtimeProducers.length})
+            </h3>
+            <span className="text-xs text-gray-500">
+              from <code className="font-mono">kind=runtime</code> dependency edges
+            </span>
+          </header>
+          <ul className="mb-3 space-y-1">
+            {runtimeProducers.map((s) => (
+              <li
+                key={s.assetId}
+                className="flex items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1 text-xs"
+              >
+                <input
+                  type="checkbox"
+                  checked={!skipped.has(s.assetId)}
+                  onChange={() => toggleSkip(s.assetId)}
+                  disabled={!s.hasManifests}
+                  className="rounded border-gray-300"
+                  title={s.hasManifests ? 'Include in apply / delete' : 'No k8s manifests — always skipped'}
+                />
+                <code className="font-mono">{s.assetId}</code>
+                <span className="text-gray-500">
+                  → namespace <code className="font-mono">{s.namespace}</code>
+                </span>
+                {!s.hasManifests && (
+                  <span className="ml-auto rounded bg-gray-200 px-1.5 py-0.5 text-[11px] text-gray-700">
+                    no manifests
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+          <div className="flex gap-2">
+            <button
+              onClick={() => applyComposite.mutate()}
+              disabled={applyComposite.isPending}
+              className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700 disabled:bg-gray-400"
+              title="Apply each producer in topo order, then this asset. Stops on the first failure."
+            >
+              {applyComposite.isPending ? 'Applying chain…' : 'Apply with dependents'}
+            </button>
+            <button
+              onClick={() => deleteComposite.mutate()}
+              disabled={deleteComposite.isPending}
+              className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+              title="Delete this asset, then each producer in reverse topo order."
+            >
+              {deleteComposite.isPending ? 'Deleting chain…' : 'Delete with dependents'}
+            </button>
+          </div>
+          {applyComposite.data && (
+            <CompositeResult title="apply" results={applyComposite.data} />
+          )}
+          {applyComposite.error && (
+            <p className="mt-2 text-xs text-red-700">apply chain failed: {(applyComposite.error as Error).message}</p>
+          )}
+          {deleteComposite.data && (
+            <CompositeResult title="delete" results={deleteComposite.data} />
+          )}
+          {deleteComposite.error && (
+            <p className="mt-2 text-xs text-red-700">delete chain failed: {(deleteComposite.error as Error).message}</p>
+          )}
+        </div>
+      )}
 
       {verifyM.data && (
         <div className={`mb-2 rounded border p-2 text-xs ${verifyM.data.passed ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
@@ -886,5 +1013,73 @@ function ContainersTable({
         ))}
       </tbody>
     </table>
+  );
+}
+
+/**
+ * Renders the result of a composite k8s apply / delete: one row per step (asset) with a counts
+ * summary parsed from the kubectl output. Skipped steps show their reason; failed steps show
+ * the kubectl exit code and full output.
+ */
+function CompositeResult({
+  title,
+  results,
+}: {
+  title: 'apply' | 'delete';
+  results: Record<string, unknown>[];
+}) {
+  return (
+    <div className="mt-2 space-y-1">
+      {results.map((r, i) => {
+        const asset = String(r.asset ?? '?');
+        if (r.skipped) {
+          return (
+            <div key={i} className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600">
+              <span className="font-mono">{asset}</span>{' '}
+              <span className="rounded bg-gray-100 px-1 text-[11px]">skipped: {String(r.skipped)}</span>
+            </div>
+          );
+        }
+        const out = String(r.output ?? '');
+        const exitCode = r.exitCode === undefined ? null : Number(r.exitCode);
+        // kubectl output: "<resource>/<name> <action>". Tally per-action so the result is at-a-glance.
+        const counts: Record<string, number> = {};
+        for (const line of out.split('\n')) {
+          const m = line.match(/^\S+\/\S+\s+(\w+)/);
+          if (m) counts[m[1]] = (counts[m[1]] ?? 0) + 1;
+        }
+        const ok = exitCode === 0 || exitCode === null;
+        return (
+          <div
+            key={i}
+            className={`rounded border px-2 py-1 text-xs ${ok ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span>{ok ? '✅' : '❌'}</span>
+              <span className="font-mono font-medium">{asset}</span>
+              {r.namespace ? (
+                <span className="text-gray-500">
+                  → ns <code className="font-mono">{String(r.namespace)}</code>
+                </span>
+              ) : null}
+              {Object.keys(counts).length > 0 && (
+                <span className="ml-auto flex gap-2 text-[11px] text-gray-600">
+                  {Object.entries(counts).map(([action, n]) => (
+                    <span key={action}>
+                      {action} <strong>{String(n)}</strong>
+                    </span>
+                  ))}
+                </span>
+              )}
+            </div>
+            {!ok && (
+              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[11px]">
+                {`${title} exit ${exitCode}\n${out}`}
+              </pre>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }

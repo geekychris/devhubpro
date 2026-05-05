@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api, type Asset } from '../api';
+import { FavoriteRatingBar } from './FavoriteRatingBar';
+import { TagEditor } from './TagEditor';
 
 export function AssetOverview({ asset }: { asset: Asset }) {
   const gitInfo = useQuery({
@@ -10,6 +12,8 @@ export function AssetOverview({ asset }: { asset: Asset }) {
 
   return (
     <div className="space-y-4">
+      <FavoriteRatingBar asset={asset} />
+
       <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 rounded border border-gray-200 bg-white p-4 text-sm">
         <Row label="Type" value={asset.type} />
         <Row label="Language" value={asset.language ?? '—'} />
@@ -26,7 +30,7 @@ export function AssetOverview({ asset }: { asset: Asset }) {
         <Row label="Default branch" value={asset.repoDefaultBranch} />
         <Row label="K8s namespace" value={asset.k8sNamespace ?? <span className="text-gray-400">{asset.id} (default)</span>} mono />
         <Row label="Description" value={asset.description ?? gitInfo.data?.description ?? '—'} wide />
-        <Row label="Tags" value={asset.tags.length ? asset.tags.join(', ') : '—'} wide />
+        <Row label="Tags" value={<TagEditor asset={asset} />} wide />
         <Row label="Created" value={new Date(asset.createdAt).toLocaleString()} />
         <Row label="Updated" value={new Date(asset.updatedAt).toLocaleString()} />
       </dl>

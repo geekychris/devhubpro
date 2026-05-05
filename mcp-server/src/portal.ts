@@ -81,4 +81,19 @@ export const portal = {
   stateExport: () => request('/api/state/export', { method: 'POST' }),
   stateGitSync: (message: string) =>
     request(`/api/state/git-sync?message=${encodeURIComponent(message)}`, { method: 'POST' }),
+
+  workspaceStatus: (assetId: string) =>
+    request(`/api/assets/${assetId}/workspace/status`),
+  workspaceDiff: (assetId: string, path: string) =>
+    request<string>(
+      `/api/assets/${assetId}/workspace/diff?path=${encodeURIComponent(path)}`
+    ),
+  commitWorkspace: (
+    assetId: string,
+    body: { branch?: string; message?: string; paths: string[]; push?: boolean }
+  ) =>
+    request(`/api/assets/${assetId}/workspace/commit`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 };

@@ -49,8 +49,21 @@ public class WorkspaceService {
     /**
      * Ensure the workspace for {@code assetId} contains a clean checkout of {@code repoUrl} at
      * {@code ref}. Returns the workspace path. Operation is serialized per asset.
+     *
+     * <p>Refuses to overwrite uncommitted local edits: if the working tree is dirty, throws so the
+     * user is forced to commit (Changes tab) or explicitly opt in to discarding via the
+     * {@link #syncCheckout(String, String, String, boolean)} overload.
      */
     public Path syncCheckout(String assetId, String repoUrl, String ref) throws GitAPIException, IOException {
+        return syncCheckout(assetId, repoUrl, ref, false);
+    }
+
+    /**
+     * Variant that lets callers opt in to discarding local edits during the {@code reset --hard}.
+     * Used by explicit "discard local" actions; never silently from build / analyze paths.
+     */
+    public Path syncCheckout(String assetId, String repoUrl, String ref, boolean discardLocal)
+            throws GitAPIException, IOException {
         Object lock = locks.computeIfAbsent(assetId, k -> new Object());
         synchronized (lock) {
             Path ws = workspaceFor(assetId);
@@ -59,9 +72,27 @@ public class WorkspaceService {
             if (!Files.isDirectory(ws.resolve(".git"))) {
                 cloneFresh(ws, repoUrl, ref);
             } else {
+                if (!discardLocal && isDirty(ws)) {
+                    throw new io.devportal.asset.error.ConflictException(
+                        "Workspace for '" + assetId + "' has uncommitted local changes. "
+                        + "Commit them via the Changes tab (or POST /api/assets/" + assetId
+                        + "/workspace/commit) before running another build / analyze. "
+                        + "To discard, repeat the action with discardLocal=true.");
+                }
                 fetchAndCheckout(ws, ref);
             }
             return ws;
+        }
+    }
+
+    private static boolean isDirty(Path ws) throws IOException {
+        try (Repository repo = new FileRepositoryBuilder().setGitDir(ws.resolve(".git").toFile()).build();
+             Git g = new Git(repo)) {
+            var s = g.status().call();
+            return s.hasUncommittedChanges() || !s.getUntracked().isEmpty();
+        } catch (GitAPIException e) {
+            // If status itself fails, treat as dirty rather than risk silently wiping.
+            return true;
         }
     }
 

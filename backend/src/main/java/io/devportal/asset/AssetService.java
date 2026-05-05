@@ -47,7 +47,11 @@ public class AssetService {
     }
 
     public List<AssetView> list(String query, String type, String lifecycle) {
-        return repo.findAll(query, type, lifecycle).stream().map(AssetView::of).toList();
+        return list(query, type, lifecycle, null);
+    }
+
+    public List<AssetView> list(String query, String type, String lifecycle, Boolean favorite) {
+        return repo.findAll(query, type, lifecycle, favorite).stream().map(AssetView::of).toList();
     }
 
     public AssetView get(String id) {
@@ -66,6 +70,7 @@ public class AssetService {
             r.tags() == null ? List.of() : r.tags(),
             r.lifecycle() == null ? "experimental" : r.lifecycle(),
             r.id(),     // default namespace = asset id
+            false, null,
             null, null
         );
         repo.insert(a);
@@ -75,6 +80,9 @@ public class AssetService {
     @Transactional
     public AssetView update(String id, UpdateAssetRequest r) {
         Asset existing = loadOr404(id);
+        Integer mergedRating = r.rating() != null
+            ? (r.rating() == 0 ? null : r.rating())   // 0 from client = clear rating
+            : existing.rating();
         Asset merged = new Asset(
             existing.id(),
             r.name() != null ? r.name() : existing.name(),
@@ -87,6 +95,8 @@ public class AssetService {
             r.tags() != null ? r.tags() : existing.tags(),
             r.lifecycle() != null ? r.lifecycle() : existing.lifecycle(),
             r.k8sNamespace() != null ? r.k8sNamespace() : existing.k8sNamespace(),
+            r.favorite() != null ? r.favorite() : existing.favorite(),
+            mergedRating,
             existing.createdAt(),
             Instant.now()
         );
@@ -235,7 +245,9 @@ public class AssetService {
 
         Asset a = new Asset(id, name, description, owner, type, language,
             summary.htmlUrl(), summary.defaultBranch(),
-            tags, lifecycle, id /* default namespace = asset id */, null, null);
+            tags, lifecycle, id /* default namespace = asset id */,
+            false, null,
+            null, null);
         repo.insert(a);
         return AssetView.of(repo.findById(id).orElseThrow());
     }

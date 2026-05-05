@@ -8,6 +8,7 @@ import io.devportal.audit.dto.AuditReport;
 import io.devportal.manifest.Manifest;
 import io.devportal.manifest.ManifestParseResult;
 import io.devportal.manifest.ManifestParser;
+import io.devportal.runtime.k8s.scaffold.FrontendScaffolder;
 import io.devportal.workspace.WorkspaceService;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -24,11 +25,14 @@ public class AuditService {
     private final AssetRepository assets;
     private final WorkspaceService workspace;
     private final ManifestParser manifestParser;
+    private final FrontendScaffolder frontendScaffolder;
 
-    public AuditService(AssetRepository assets, WorkspaceService workspace, ManifestParser manifestParser) {
+    public AuditService(AssetRepository assets, WorkspaceService workspace,
+                        ManifestParser manifestParser, FrontendScaffolder frontendScaffolder) {
         this.assets = assets;
         this.workspace = workspace;
         this.manifestParser = manifestParser;
+        this.frontendScaffolder = frontendScaffolder;
     }
 
     public AuditReport audit(String assetId) {
@@ -46,6 +50,7 @@ public class AuditService {
         } else {
             auditManifest(asset, ws, findings);
             auditDocs(ws, findings);
+            auditFrontendTiers(ws, findings);
         }
 
         int errors = (int) findings.stream().filter(f -> "error".equals(f.severity())).count();
@@ -113,6 +118,30 @@ public class AuditService {
                 "manifest.read-failed", "error", "manifest",
                 "Could not read devportal.yaml: " + e.getMessage(),
                 "Check file permissions"));
+        }
+    }
+
+    /**
+     * Surface React/Vite/Next/Vue/Angular tiers — and flag any that don't have a Dockerfile yet,
+     * so the user can one-click scaffold them.
+     */
+    private void auditFrontendTiers(Path ws, List<AuditFinding> findings) {
+        for (FrontendScaffolder.Tier t : frontendScaffolder.detectTiers(ws)) {
+            if (!t.hasDockerfile()) {
+                findings.add(new AuditFinding(
+                    "frontend.no-dockerfile",
+                    "warn", "frontend",
+                    t.framework() + " tier at " + t.relPath() + " has no Dockerfile.",
+                    "POST /api/assets/<id>/scaffold-frontend?path=" + t.relPath()
+                        + " writes a multi-stage Dockerfile + nginx.conf + k8s manifest."));
+            } else {
+                findings.add(new AuditFinding(
+                    "frontend.detected",
+                    "info", "frontend",
+                    t.framework() + " tier at " + t.relPath()
+                        + " (" + t.packageManager() + ", out=" + t.outputDir() + ") — Dockerfile present.",
+                    "Already scaffolded."));
+            }
         }
     }
 

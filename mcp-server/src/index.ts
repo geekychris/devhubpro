@@ -154,6 +154,49 @@ const tools = [
       properties: { message: { type: 'string', default: 'snapshot' } },
     },
   },
+  {
+    name: 'workspace_status',
+    description:
+      'Inspect an asset workspace: current branch, ahead/behind origin, list of dirty/untracked files. Use this before kicking a build if you suspect uncommitted edits.',
+    inputSchema: {
+      type: 'object',
+      properties: { assetId: { type: 'string' } },
+      required: ['assetId'],
+    },
+  },
+  {
+    name: 'workspace_diff',
+    description:
+      'Unified diff between HEAD and the working tree for one path in an asset workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: { assetId: { type: 'string' }, path: { type: 'string' } },
+      required: ['assetId', 'path'],
+    },
+  },
+  {
+    name: 'commit_workspace_changes',
+    description:
+      'Commit selected workspace files to a side branch and optionally push to origin. Refuses main/master. Use this after editing files in an asset workspace (e.g. to fix a build).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        assetId: { type: 'string' },
+        branch: {
+          type: 'string',
+          description: 'Branch name; if omitted, devportal/fix-<asset>-<ts> is used.',
+        },
+        message: { type: 'string' },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Repo-relative paths to stage. Leave empty for nothing (no-op).',
+        },
+        push: { type: 'boolean', default: false },
+      },
+      required: ['assetId', 'paths'],
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
@@ -220,6 +263,17 @@ async function dispatch(name: string, a: Record<string, unknown>): Promise<unkno
       return portal.audit(a.assetId as string);
     case 'state_git_sync':
       return portal.stateGitSync((a.message as string) ?? 'snapshot');
+    case 'workspace_status':
+      return portal.workspaceStatus(a.assetId as string);
+    case 'workspace_diff':
+      return portal.workspaceDiff(a.assetId as string, a.path as string);
+    case 'commit_workspace_changes':
+      return portal.commitWorkspace(a.assetId as string, {
+        branch: a.branch as string | undefined,
+        message: a.message as string | undefined,
+        paths: (a.paths as string[]) ?? [],
+        push: Boolean(a.push),
+      });
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

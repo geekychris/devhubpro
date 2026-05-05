@@ -13,5 +13,7 @@ public record UpdateAssetRequest(
     String repoDefaultBranch,
     List<String> tags,
     String lifecycle,
-    String k8sNamespace
+    String k8sNamespace,
+    Boolean favorite,
+    Integer rating
 ) {}

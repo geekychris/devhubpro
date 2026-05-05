@@ -2,13 +2,21 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api, type Asset } from '../api';
+import { StarRating } from '../components/StarRating';
 
 export function AssetsPage() {
   const [q, setQ] = useState('');
   const [type, setType] = useState('');
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const { data, isLoading, error } = useQuery({
-    queryKey: ['assets', q, type],
-    queryFn: () => api.listAssets(q || undefined, type || undefined),
+    queryKey: ['assets', q, type, favoritesOnly],
+    queryFn: () =>
+      api.listAssets(q || undefined, type || undefined, undefined, favoritesOnly || undefined),
+  });
+  const favorites = useQuery({
+    queryKey: ['favorites'],
+    queryFn: () => api.listAssets(undefined, undefined, undefined, true),
+    staleTime: 30_000,
   });
 
   return (
@@ -23,13 +31,17 @@ export function AssetsPage() {
         </Link>
       </div>
 
-      <div className="flex gap-3">
+      {favorites.data && favorites.data.length > 0 && !favoritesOnly && !q && (
+        <FavoritesStrip assets={favorites.data} />
+      )}
+
+      <div className="flex flex-wrap items-center gap-3">
         <input
           type="search"
-          placeholder="Search by id, name, or description"
+          placeholder='Search — multiple words OR by default; use AND for "all of"'
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          className="flex-1 rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+          className="flex-1 min-w-[260px] rounded border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
         />
         <select
           value={type}
@@ -41,6 +53,15 @@ export function AssetsPage() {
           <option value="service">Service</option>
           <option value="meta-asset">Meta-asset</option>
         </select>
+        <label className="inline-flex items-center gap-1 text-sm">
+          <input
+            type="checkbox"
+            checked={favoritesOnly}
+            onChange={(e) => setFavoritesOnly(e.target.checked)}
+            className="rounded border-gray-300"
+          />
+          <span>♥ Favorites only</span>
+        </label>
       </div>
 
       {isLoading && <p className="text-gray-500">Loading…</p>}
@@ -56,6 +77,32 @@ export function AssetsPage() {
         </ul>
       )}
     </div>
+  );
+}
+
+function FavoritesStrip({ assets }: { assets: Asset[] }) {
+  const top = [...assets]
+    .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || a.id.localeCompare(b.id))
+    .slice(0, 8);
+  return (
+    <section className="rounded border border-amber-200 bg-amber-50/40 p-3">
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-800">
+        ♥ Top favorites
+      </h2>
+      <div className="flex flex-wrap gap-2">
+        {top.map((a) => (
+          <Link
+            key={a.id}
+            to={`/assets/${a.id}`}
+            className="flex min-w-[180px] max-w-xs flex-1 flex-col rounded border border-amber-200 bg-white px-3 py-2 hover:border-amber-400"
+          >
+            <span className="truncate text-sm font-medium text-gray-900">{a.name}</span>
+            <span className="truncate text-[11px] text-gray-500">{a.id}</span>
+            <StarRating value={a.rating} readOnly size={12} />
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -102,7 +149,10 @@ function AssetRow({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
+            <div className="min-w-0 flex items-center gap-2">
+              {asset.favorite && (
+                <span title="Favorite" style={{ color: '#dc2626' }}>♥</span>
+              )}
               <Link
                 to={`/assets/${asset.id}`}
                 className="font-medium text-gray-900 hover:underline"
@@ -110,6 +160,11 @@ function AssetRow({
                 {asset.name}
               </Link>
               <span className="ml-2 text-xs text-gray-500">{asset.id}</span>
+              {asset.rating != null && (
+                <span className="ml-1" title={`${asset.rating}/5`}>
+                  <StarRating value={asset.rating} readOnly size={12} />
+                </span>
+              )}
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <Badge>{asset.type}</Badge>

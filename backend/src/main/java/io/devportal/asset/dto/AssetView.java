@@ -16,12 +16,14 @@ public record AssetView(
     List<String> tags,
     String lifecycle,
     String k8sNamespace,
+    boolean favorite,
+    Integer rating,
     Instant createdAt,
     Instant updatedAt
 ) {
     public static AssetView of(Asset a) {
         return new AssetView(a.id(), a.name(), a.description(), a.owner(), a.type(),
             a.language(), a.repoUrl(), a.repoDefaultBranch(), a.tags(), a.lifecycle(),
-            a.k8sNamespace(), a.createdAt(), a.updatedAt());
+            a.k8sNamespace(), a.favorite(), a.rating(), a.createdAt(), a.updatedAt());
     }
 }

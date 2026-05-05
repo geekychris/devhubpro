@@ -35,9 +35,10 @@ public class AssetController {
     public List<AssetView> list(
         @RequestParam(name = "q", required = false) String query,
         @RequestParam(required = false) String type,
-        @RequestParam(required = false) String lifecycle
+        @RequestParam(required = false) String lifecycle,
+        @RequestParam(required = false) Boolean favorite
     ) {
-        return service.list(query, type, lifecycle);
+        return service.list(query, type, lifecycle, favorite);
     }
 
     @PostMapping

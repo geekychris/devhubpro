@@ -3,27 +3,50 @@ package io.devportal.runtime.k8s;
 import io.devportal.runtime.k8s.dto.K8sStatus;
 import io.devportal.runtime.k8s.dto.MonitoringLinks;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 public class K8sController {
 
     private final K8sService k8s;
+    private final K8sCompositionService composition;
+    private final K8sDiagnosticsService diagnostics;
     private final io.devportal.asset.AssetRepository assets;
 
-    public K8sController(K8sService k8s, io.devportal.asset.AssetRepository assets) {
+    public K8sController(K8sService k8s, K8sCompositionService composition,
+                         K8sDiagnosticsService diagnostics,
+                         io.devportal.asset.AssetRepository assets) {
         this.k8s = k8s;
+        this.composition = composition;
+        this.diagnostics = diagnostics;
         this.assets = assets;
     }
 
     @PostMapping("/api/assets/{id}/k8s/apply")
-    public Map<String, Object> apply(@PathVariable String id) throws IOException, InterruptedException {
+    public Object apply(
+        @PathVariable String id,
+        @RequestParam(name = "include", required = false) String include,
+        @RequestParam(name = "skip", required = false) String skip
+    ) throws IOException, InterruptedException {
+        if ("runtime".equalsIgnoreCase(include)) {
+            return composition.applyComposite(id, parseCsv(skip));
+        }
         return k8s.apply(id);
+    }
+
+    @GetMapping("/api/assets/{id}/k8s/runtime-plan")
+    public K8sCompositionService.RuntimePlan runtimePlan(@PathVariable String id) {
+        return composition.plan(id);
     }
 
     /** Render manifests with allocated NodePorts patched in; returns the dir path (no apply). */
@@ -37,8 +60,20 @@ public class K8sController {
     }
 
     @DeleteMapping("/api/assets/{id}/k8s")
-    public Map<String, Object> delete(@PathVariable String id) throws IOException, InterruptedException {
+    public Object delete(
+        @PathVariable String id,
+        @RequestParam(name = "include", required = false) String include,
+        @RequestParam(name = "skip", required = false) String skip
+    ) throws IOException, InterruptedException {
+        if ("runtime".equalsIgnoreCase(include)) {
+            return composition.deleteComposite(id, parseCsv(skip));
+        }
         return k8s.delete(id);
+    }
+
+    private static Set<String> parseCsv(String csv) {
+        if (csv == null || csv.isBlank()) return Set.of();
+        return new HashSet<>(Arrays.asList(csv.split("\\s*,\\s*")));
     }
 
     @GetMapping("/api/assets/{id}/k8s/status")
@@ -49,5 +84,11 @@ public class K8sController {
     @GetMapping("/api/assets/{id}/k8s/links")
     public MonitoringLinks links(@PathVariable String id) {
         return k8s.links(id);
+    }
+
+    @GetMapping("/api/assets/{id}/k8s/diagnostics")
+    public io.devportal.runtime.k8s.dto.K8sDiagnostics diagnostics(@PathVariable String id)
+            throws IOException, InterruptedException {
+        return diagnostics.diagnose(id);
     }
 }

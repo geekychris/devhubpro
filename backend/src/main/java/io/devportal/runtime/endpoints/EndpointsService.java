@@ -40,13 +40,17 @@ public class EndpointsService {
     private final AssetRepository assets;
     private final PortRepository ports;
     private final WorkspaceService workspace;
+    private final io.devportal.runtime.k8s.K8sService k8s;
     private final ObjectMapper json = new ObjectMapper();
     private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory());
 
-    public EndpointsService(AssetRepository assets, PortRepository ports, WorkspaceService workspace) {
+    public EndpointsService(AssetRepository assets, PortRepository ports,
+                            WorkspaceService workspace,
+                            io.devportal.runtime.k8s.K8sService k8s) {
         this.assets = assets;
         this.ports = ports;
         this.workspace = workspace;
+        this.k8s = k8s;
     }
 
     public AssetEndpoints discover(String assetId) throws IOException, InterruptedException {
@@ -56,7 +60,6 @@ public class EndpointsService {
         List<AssetEndpoints.Endpoint> out = new ArrayList<>();
 
         boolean hasLocalContainer = dockerContainerRunning(assetId);
-        boolean hasK8sPod = k8sPodRunning(assetId);
 
         // Local docker ports — host accessible
         for (PortReservation r : ports.findByAssetAndScope(assetId, "local")) {
@@ -72,18 +75,41 @@ public class EndpointsService {
             }
         }
 
-        // k8s NodePort URLs — host accessible (Rancher Desktop forwards localhost;
-        // on remote clusters NodePort is on the node IP, not localhost)
-        for (PortReservation r : ports.findByAssetAndScope(assetId, "k8s-nodeport")) {
-            String url = "http://localhost:" + r.port() + "/";
-            out.add(new AssetEndpoints.Endpoint(
-                "K8s NodePort — " + r.slotName(),
-                url, "k8s-nodeport",
-                "port registry NodePort " + r.port() + " forwards from localhost",
-                hasK8sPod, true, null));
-            if ("http".equals(r.slotName())) {
-                addSpringPaths(out, "K8s — ", "http://localhost:" + r.port(),
-                    hasK8sPod, "NodePort", true, null);
+        // k8s Services — walk the live cluster instead of the port_reservation table so we see
+        // every Service the asset deploys (including Services with hard-coded NodePorts that
+        // bypassed the registry, like a frontend pinned to 30080). Each Service+port pair gets
+        // its own endpoint row so the user can tell which URL talks to which component.
+        for (K8sServiceInfo svc : listAssetServices(assetId)) {
+            for (K8sServicePort sp : svc.ports) {
+                String role = inferRole(svc.name, sp.name, sp.targetPort, svc.imageHints);
+                String label = svc.name + (sp.name != null && !sp.name.isBlank() ? " — " + sp.name : "")
+                    + (role != null ? " (" + role + ")" : "");
+                if ("NodePort".equalsIgnoreCase(svc.type) || "LoadBalancer".equalsIgnoreCase(svc.type)) {
+                    if (sp.nodePort != null) {
+                        String url = "http://localhost:" + sp.nodePort + "/";
+                        out.add(new AssetEndpoints.Endpoint(
+                            label, url, "k8s-nodeport",
+                            "Service " + svc.name + " " + svc.type + " :" + sp.nodePort,
+                            svc.hasReadyEndpoint, true, null));
+                        // Layer Spring's conventional paths only on Services that look like Spring Boot.
+                        if (looksLikeSpring(role, svc.imageHints)) {
+                            addSpringPaths(out, svc.name + " — ", "http://localhost:" + sp.nodePort,
+                                svc.hasReadyEndpoint, "NodePort " + sp.nodePort, true, null);
+                        }
+                    }
+                } else if ("ClusterIP".equalsIgnoreCase(svc.type) || svc.type == null || svc.type.isBlank()) {
+                    // In-cluster only — offer a port-forward hint so users can expose to host on demand.
+                    String firstPodName = firstRunningPodNameForLabel(svc.namespace, svc.selector);
+                    AssetEndpoints.ExposeHint hint = (firstPodName == null || sp.targetPort == null)
+                        ? null
+                        : new AssetEndpoints.ExposeHint("port-forward", firstPodName, sp.targetPort);
+                    out.add(new AssetEndpoints.Endpoint(
+                        label + " (in-cluster only)",
+                        svc.clusterIp != null ? "http://" + svc.clusterIp + ":" + sp.port + "/" : "(no clusterIP)",
+                        "k8s-cluster",
+                        "Service " + svc.name + " ClusterIP",
+                        svc.hasReadyEndpoint, false, hint));
+                }
             }
         }
 
@@ -94,23 +120,201 @@ public class EndpointsService {
                 "asset.repoUrl", true, true, null));
         }
 
-        // ClusterIP — in-cluster only; offer "expose to host" hint that opens a port-forward.
-        if (hasK8sPod) {
-            ClusterIp cip = clusterServiceIp(assetId);
-            if (cip != null) {
-                String firstPodName = firstRunningPodName(assetId);
-                AssetEndpoints.ExposeHint hint = firstPodName == null ? null
-                    : new AssetEndpoints.ExposeHint("port-forward", firstPodName, cip.port());
+        // Dependents — host-accessible URLs from runtime-edge producers, prefixed so it's clear
+        // they belong to a different asset. 1-hop only to keep the list digestible; users can
+        // drill into a specific producer's endpoint card to see its full surface.
+        java.util.Set<String> seenProducers = new java.util.HashSet<>();
+        for (io.devportal.asset.Dependency d : assets.findDependenciesOf(assetId)) {
+            if (!"runtime".equals(d.kind())) continue;
+            if (!seenProducers.add(d.producerId())) continue;
+            for (PortReservation r : ports.findByAssetAndScope(d.producerId(), "local")) {
                 out.add(new AssetEndpoints.Endpoint(
-                    "ClusterIP (in-cluster only)",
-                    "http://" + cip.ip() + ":" + cip.port() + "/",
-                    "k8s-cluster",
-                    "Service " + cip.name(),
-                    true, false, hint));
+                    "Dependent " + d.producerId() + " — " + r.slotName(),
+                    "http://localhost:" + r.port() + "/",
+                    "dependent-local",
+                    "runtime edge -> " + d.producerId() + " (port registry local)",
+                    dockerContainerRunning(d.producerId()), true, null));
+            }
+            for (PortReservation r : ports.findByAssetAndScope(d.producerId(), "k8s-nodeport")) {
+                out.add(new AssetEndpoints.Endpoint(
+                    "Dependent " + d.producerId() + " — " + r.slotName() + " (NodePort)",
+                    "http://localhost:" + r.port() + "/",
+                    "dependent-k8s-nodeport",
+                    "runtime edge -> " + d.producerId() + " (NodePort " + r.port() + ")",
+                    k8sPodRunning(d.producerId()), true, null));
             }
         }
 
         return new AssetEndpoints(assetId, out);
+    }
+
+    /** Inferred role string for an endpoint, e.g. "Web UI", "API", "WebSocket", "metrics". */
+    private static String inferRole(String svcName, String portName, Integer targetPort, String imageHints) {
+        String s = (svcName == null ? "" : svcName.toLowerCase());
+        String p = (portName == null ? "" : portName.toLowerCase());
+        String h = (imageHints == null ? "" : imageHints.toLowerCase());
+        if (p.contains("metric") || (targetPort != null && (targetPort == 9090 || targetPort == 9100))) return "metrics";
+        if (p.contains("ws") || p.contains("websocket") || s.contains("ws-") || s.contains("-ws") || s.contains("gateway")) return "WebSocket";
+        if (h.contains("nginx") || h.contains("httpd") || h.contains("caddy") || s.contains("frontend") || s.contains("ui") || s.contains("web")) return "Web UI";
+        if (s.contains("proxy") || s.contains("gateway") || s.contains("api") || s.contains("app") || s.contains("server") || s.contains("backend")) return "API";
+        if (s.contains("admin") || s.contains("airflow") || s.contains("console")) return "Admin UI";
+        return null;
+    }
+
+    /** True when the image / role looks like a Spring Boot deployment (so /actuator/* paths are useful). */
+    private static boolean looksLikeSpring(String role, String imageHints) {
+        if (imageHints == null) return false;
+        String h = imageHints.toLowerCase();
+        if (h.contains("temurin") || h.contains("openjdk") || h.contains("eclipse-temurin") || h.contains("bellsoft")) return true;
+        return false;
+    }
+
+    private record K8sServicePort(String name, int port, Integer targetPort, Integer nodePort) {}
+
+    private static class K8sServiceInfo {
+        String name;
+        String namespace;
+        String type;
+        String clusterIp;
+        String selector;             // joined "k=v,k=v" form, used for pod lookups
+        String imageHints;           // image refs of pods matching the selector, comma-joined
+        boolean hasReadyEndpoint;
+        List<K8sServicePort> ports = new ArrayList<>();
+    }
+
+    /**
+     * List Services that belong to the asset. We can't rely on a label like {@code app=<id>}
+     * because manifests typically label by service name (e.g. {@code app=social-app}). Instead,
+     * read the Service names from the asset's k8s manifest tree and look each up in the cluster.
+     */
+    private List<K8sServiceInfo> listAssetServices(String assetId) {
+        List<K8sServiceInfo> result = new ArrayList<>();
+        java.util.Set<String> svcNames = readServiceNamesFromManifests(assetId);
+        if (svcNames.isEmpty()) return result;
+
+        // Resolve namespace via the k8s service so we use the same logic as apply.
+        String ns;
+        try { ns = k8sNamespace(assetId); } catch (Exception e) { return result; }
+
+        try {
+            ProcResult r = exec("kubectl", "get", "services", "-n", ns, "-o", "json");
+            if (r == null || r.exitCode != 0) return result;
+            JsonNode root = json.readTree(r.output);
+            JsonNode items = root.path("items");
+            if (!items.isArray()) return result;
+            for (JsonNode svc : items) {
+                String name = svc.path("metadata").path("name").asText("");
+                if (!svcNames.contains(name)) continue;
+                K8sServiceInfo info = new K8sServiceInfo();
+                info.name = name;
+                info.namespace = ns;
+                info.type = svc.path("spec").path("type").asText("ClusterIP");
+                JsonNode cip = svc.path("spec").path("clusterIP");
+                info.clusterIp = (!cip.isMissingNode() && !"None".equals(cip.asText(null))) ? cip.asText(null) : null;
+                info.selector = joinSelector(svc.path("spec").path("selector"));
+                info.imageHints = imageHintsForSelector(ns, info.selector);
+                info.hasReadyEndpoint = endpointsReady(ns, name);
+                JsonNode portsArr = svc.path("spec").path("ports");
+                if (portsArr.isArray()) {
+                    for (JsonNode pn : portsArr) {
+                        info.ports.add(new K8sServicePort(
+                            pn.path("name").asText(null),
+                            pn.path("port").asInt(0),
+                            pn.has("targetPort") && pn.path("targetPort").canConvertToInt()
+                                ? pn.path("targetPort").asInt() : null,
+                            pn.has("nodePort") && !pn.path("nodePort").isNull() ? pn.path("nodePort").asInt() : null
+                        ));
+                    }
+                }
+                result.add(info);
+            }
+        } catch (Exception e) {
+            log.debug("listAssetServices({}): {}", assetId, e.getMessage());
+        }
+        return result;
+    }
+
+    private java.util.Set<String> readServiceNamesFromManifests(String assetId) {
+        java.util.Set<String> names = new java.util.HashSet<>();
+        try {
+            java.nio.file.Path src = k8s.resolveK8sPath(assetId);
+            try (var stream = java.nio.file.Files.walk(src)) {
+                stream.filter(java.nio.file.Files::isRegularFile)
+                    .filter(p -> {
+                        String n = p.getFileName().toString().toLowerCase();
+                        return (n.endsWith(".yaml") || n.endsWith(".yml"))
+                            && !n.equals("kustomization.yaml") && !n.equals("kustomization.yml");
+                    })
+                    .forEach(p -> collectServiceNames(p, names));
+            }
+        } catch (Exception ignored) {}
+        return names;
+    }
+
+    private void collectServiceNames(java.nio.file.Path file, java.util.Set<String> out) {
+        try (var parser = yaml.getFactory().createParser(java.nio.file.Files.newBufferedReader(file))) {
+            com.fasterxml.jackson.databind.MappingIterator<JsonNode> it =
+                yaml.readerFor(JsonNode.class).readValues(parser);
+            while (it.hasNext()) {
+                JsonNode doc = it.next();
+                if (doc == null || !doc.isObject()) continue;
+                if ("Service".equalsIgnoreCase(doc.path("kind").asText())) {
+                    String name = doc.path("metadata").path("name").asText(null);
+                    if (name != null && !name.isBlank()) out.add(name);
+                }
+            }
+        } catch (IOException ignored) {}
+    }
+
+    private String k8sNamespace(String assetId) {
+        // Reuse K8sService.effectiveNamespace via the same logic — but we don't have a direct
+        // reference, so duplicate the cheap part: read asset.k8sNamespace, fall back to id.
+        var a = assets.findById(assetId).orElse(null);
+        if (a != null && a.k8sNamespace() != null && !a.k8sNamespace().isBlank()) return a.k8sNamespace();
+        return assetId;
+    }
+
+    private static String joinSelector(JsonNode selectorNode) {
+        if (!selectorNode.isObject()) return "";
+        var sb = new StringBuilder();
+        var fields = selectorNode.fields();
+        boolean first = true;
+        while (fields.hasNext()) {
+            var e = fields.next();
+            if (!first) sb.append(',');
+            sb.append(e.getKey()).append('=').append(e.getValue().asText());
+            first = false;
+        }
+        return sb.toString();
+    }
+
+    private String imageHintsForSelector(String ns, String selector) {
+        if (selector == null || selector.isBlank()) return "";
+        try {
+            ProcResult r = exec("kubectl", "get", "pods", "-n", ns, "-l", selector,
+                "-o", "jsonpath={.items[*].spec.containers[*].image}");
+            if (r != null && r.exitCode == 0) return r.output.trim().replace(' ', ',');
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    private boolean endpointsReady(String ns, String svcName) {
+        try {
+            ProcResult r = exec("kubectl", "get", "endpoints", svcName, "-n", ns,
+                "-o", "jsonpath={.subsets[*].addresses[*].ip}");
+            return r != null && r.exitCode == 0 && !r.output.trim().isEmpty();
+        } catch (Exception e) { return false; }
+    }
+
+    private String firstRunningPodNameForLabel(String ns, String selector) {
+        if (selector == null || selector.isBlank()) return null;
+        try {
+            ProcResult r = exec("kubectl", "get", "pods", "-n", ns, "-l", selector,
+                "-o", "jsonpath={.items[?(@.status.phase=='Running')].metadata.name}");
+            String s = r.output.trim();
+            if (s.isEmpty()) return null;
+            return s.split("\\s+")[0];
+        } catch (Exception e) { return null; }
     }
 
     private String firstRunningPodName(String assetId) {

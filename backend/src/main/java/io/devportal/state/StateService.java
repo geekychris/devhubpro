@@ -134,6 +134,8 @@ public class StateService {
         doc.put("repoDefaultBranch", a.repoDefaultBranch());
         if (a.tags() != null && !a.tags().isEmpty()) doc.put("tags", a.tags());
         doc.put("lifecycle", a.lifecycle());
+        if (a.favorite()) doc.put("favorite", true);
+        if (a.rating() != null) doc.put("rating", a.rating());
         if (!deps.isEmpty()) {
             List<Map<String, Object>> depDocs = new ArrayList<>();
             for (Dependency d : deps) {
@@ -151,6 +153,9 @@ public class StateService {
     private Asset docToAsset(Map<String, Object> doc) {
         @SuppressWarnings("unchecked")
         List<String> tags = (List<String>) doc.getOrDefault("tags", List.of());
+        Object ratingObj = doc.get("rating");
+        Integer rating = (ratingObj instanceof Number n) ? n.intValue() : null;
+        boolean favorite = Boolean.TRUE.equals(doc.get("favorite"));
         return new Asset(
             (String) doc.get("id"),
             (String) doc.get("name"),
@@ -163,6 +168,7 @@ public class StateService {
             tags,
             (String) doc.getOrDefault("lifecycle", "experimental"),
             (String) doc.get("k8sNamespace"),
+            favorite, rating,
             null, null
         );
     }

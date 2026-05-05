@@ -24,6 +24,15 @@ public class DockerController {
         return ResponseEntity.status(202).body(docker.buildImage(id));
     }
 
+    @PostMapping("/api/assets/{id}/docker/build-images")
+    public ResponseEntity<BuildView> buildAllImages(
+        @PathVariable String id,
+        @org.springframework.web.bind.annotation.RequestParam(name = "include", required = false) String include
+    ) throws IOException {
+        boolean withRuntime = "runtime".equalsIgnoreCase(include);
+        return ResponseEntity.status(202).body(docker.buildAllImages(id, withRuntime));
+    }
+
     @PostMapping("/api/assets/{id}/docker/run")
     public ResponseEntity<RunContainerResult> run(@PathVariable String id) throws IOException, InterruptedException {
         return ResponseEntity.ok(docker.runContainer(id));

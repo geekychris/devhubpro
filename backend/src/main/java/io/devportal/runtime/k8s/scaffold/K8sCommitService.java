@@ -1,12 +1,11 @@
 package io.devportal.runtime.k8s.scaffold;
 
-import io.devportal.analyze.GitHubUrlParser;
 import io.devportal.asset.Asset;
 import io.devportal.asset.AssetRepository;
 import io.devportal.asset.error.ConflictException;
 import io.devportal.asset.error.NotFoundException;
 import io.devportal.runtime.k8s.K8sService;
-import io.devportal.secret.SecretService;
+import io.devportal.workspace.WorkspaceCommitService;
 import io.devportal.workspace.WorkspaceService;
 import java.io.IOException;
 import java.nio.file.FileVisitResult;
@@ -14,16 +13,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
-import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
-import org.eclipse.jgit.lib.PersonIdent;
-import org.eclipse.jgit.lib.Ref;
-import org.eclipse.jgit.lib.Repository;
-import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
-import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -45,17 +36,84 @@ public class K8sCommitService {
     private final K8sService k8s;
     private final K8sScaffolder scaffolder;
     private final DockerfileScaffolder dockerfileScaffolder;
-    private final SecretService secrets;
+    private final FrontendScaffolder frontendScaffolder;
+    private final WorkspaceCommitService committer;
 
     public K8sCommitService(AssetRepository assets, WorkspaceService workspace,
                             K8sService k8s, K8sScaffolder scaffolder,
-                            DockerfileScaffolder dockerfileScaffolder, SecretService secrets) {
+                            DockerfileScaffolder dockerfileScaffolder,
+                            FrontendScaffolder frontendScaffolder,
+                            WorkspaceCommitService committer) {
         this.assets = assets;
         this.workspace = workspace;
         this.k8s = k8s;
         this.scaffolder = scaffolder;
         this.dockerfileScaffolder = dockerfileScaffolder;
-        this.secrets = secrets;
+        this.frontendScaffolder = frontendScaffolder;
+        this.committer = committer;
+    }
+
+    /**
+     * Detect frontend tiers (React / Vite / Next / Vue / Angular) under this asset's workspace.
+     * Read-only — surfaces what the {@link FrontendScaffolder} would act on.
+     */
+    public List<FrontendScaffolder.Tier> detectFrontendTiers(String assetId) throws IOException {
+        Asset asset = loadAndEnsure(assetId);
+        return frontendScaffolder.detectTiers(workspace.workspaceFor(asset.id()));
+    }
+
+    /**
+     * Scaffold a single frontend tier. {@code path} is repo-relative (e.g.
+     * {@code social-platform/social-frontend}); use {@link #detectFrontendTiers} to discover.
+     * Allocates a NodePort from the 30100..30199 range that doesn't collide with existing
+     * Service nodePorts in the asset's k8s/ tree.
+     */
+    public FrontendScaffolder.ScaffoldResult scaffoldFrontend(String assetId, String path)
+            throws IOException {
+        Asset asset = loadAndEnsure(assetId);
+        Path ws = workspace.workspaceFor(asset.id());
+        List<FrontendScaffolder.Tier> tiers = frontendScaffolder.detectTiers(ws);
+        FrontendScaffolder.Tier tier = tiers.stream()
+            .filter(t -> t.relPath().equals(path))
+            .findFirst()
+            .orElseThrow(() -> new io.devportal.asset.error.NotFoundException(
+                "No frontend tier at '" + path + "' in workspace. Detected: "
+                + tiers.stream().map(FrontendScaffolder.Tier::relPath).toList()));
+
+        Path k8sDir = ws.resolve("k8s");
+        int nodePort = pickFreeFrontendNodePort(k8sDir);
+        return frontendScaffolder.scaffold(asset, ws, tier, k8sDir, nodePort);
+    }
+
+    /**
+     * Pick a NodePort in the 30100..30199 range that isn't already used by another Service in
+     * the asset's k8s/ tree. Keeps frontend tiers from clashing with each other or with the
+     * asset's other Services. Falls back to 30100 if scan fails.
+     */
+    private int pickFreeFrontendNodePort(Path k8sDir) {
+        java.util.Set<Integer> used = new java.util.HashSet<>();
+        if (java.nio.file.Files.isDirectory(k8sDir)) {
+            try (var stream = java.nio.file.Files.walk(k8sDir)) {
+                stream.filter(java.nio.file.Files::isRegularFile)
+                    .filter(p -> {
+                        String n = p.getFileName().toString().toLowerCase();
+                        return n.endsWith(".yaml") || n.endsWith(".yml");
+                    })
+                    .forEach(p -> {
+                        try {
+                            for (String line : java.nio.file.Files.readAllLines(p)) {
+                                int idx = line.indexOf("nodePort:");
+                                if (idx < 0) continue;
+                                String tail = line.substring(idx + "nodePort:".length()).trim();
+                                try { used.add(Integer.parseInt(tail.split("\\s+")[0])); }
+                                catch (NumberFormatException ignored) {}
+                            }
+                        } catch (IOException ignored) {}
+                    });
+            } catch (IOException ignored) {}
+        }
+        for (int p = 30100; p <= 30199; p++) if (!used.contains(p)) return p;
+        return 30100;
     }
 
     /**
@@ -96,7 +154,9 @@ public class K8sCommitService {
         copyTreeOver(rendered, source);
         // Stage only the k8s manifest path — never `target/` or other build cruft.
         String relPath = ws.relativize(source).toString();
-        return commitChanges(asset, ws, branch, message, push, List.of(relPath));
+        String msg = (message == null || message.isBlank())
+            ? "devportal: update k8s manifests with allocated ports" : message;
+        return committer.commit(asset.id(), branch, msg, List.of(relPath), push);
     }
 
     /**
@@ -106,80 +166,9 @@ public class K8sCommitService {
     public CommitResult commitWorkspace(String assetId, String branch, String message,
                                         boolean push) throws IOException, GitAPIException {
         Asset asset = loadAndEnsure(assetId);
-        // Stage k8s/ + Dockerfile (and Dockerfile.X variants).
-        return commitChanges(asset, workspace.workspaceFor(asset.id()), branch, message, push,
-            List.of("k8s", "Dockerfile"));
-    }
-
-    private CommitResult commitChanges(Asset asset, Path ws, String branch, String message,
-                                       boolean push, List<String> stagePatterns)
-            throws IOException, GitAPIException {
-        if (branch == null || branch.isBlank()) branch = "devportal/k8s-" + Instant.now().getEpochSecond();
-        if (message == null || message.isBlank()) {
-            message = "devportal: update k8s manifests with allocated ports";
-        }
-        try (Repository repo = new FileRepositoryBuilder().setGitDir(ws.resolve(".git").toFile()).build();
-             Git git = new Git(repo)) {
-            // Branch off current HEAD if it doesn't exist.
-            String fullRef = "refs/heads/" + branch;
-            Ref existing = repo.findRef(fullRef);
-            if (existing == null) {
-                git.checkout().setName(branch).setCreateBranch(true).call();
-            } else {
-                git.checkout().setName(branch).call();
-            }
-
-            // Stage only the requested paths. Two passes: one for new files, one for tracked-and-modified.
-            var addCmd = git.add();
-            for (String p : stagePatterns) addCmd.addFilepattern(p);
-            addCmd.call();
-            var addUpdate = git.add().setUpdate(true);
-            for (String p : stagePatterns) addUpdate.addFilepattern(p);
-            addUpdate.call();
-            var status = git.status().call();
-            // Only count what's actually staged; ignore untracked / unstaged-modified workspace cruft.
-            List<String> files = new ArrayList<>();
-            files.addAll(status.getAdded());
-            files.addAll(status.getChanged());
-            files.addAll(status.getRemoved());
-            if (files.isEmpty()) {
-                log.info("commitChanges: nothing to commit for {}", asset.id());
-                return new CommitResult(asset.id(), branch, null, List.of(), false, null,
-                    suggestPullRequest(asset, branch));
-            }
-
-            PersonIdent ident = new PersonIdent("dev_portal", "noreply@devportal.io",
-                java.util.Date.from(Instant.now()), java.util.TimeZone.getDefault());
-            var commit = git.commit().setMessage(message).setAuthor(ident).setCommitter(ident).call();
-            String sha = commit.getId().getName();
-            log.info("Committed {} on {} for {} ({} files)", sha, branch, asset.id(), files.size());
-
-            String pushOut = null;
-            boolean pushed = false;
-            if (push) {
-                String token = secrets.githubToken();
-                if (token == null || token.isBlank()) {
-                    throw new ConflictException("Push requires a GitHub token; set one in /settings.");
-                }
-                var pushCmd = git.push()
-                    .setRemote("origin")
-                    .setRefSpecs(new org.eclipse.jgit.transport.RefSpec(branch + ":" + branch))
-                    .setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token", token));
-                StringBuilder out = new StringBuilder();
-                pushCmd.call().forEach(r -> out.append(r.getMessages()).append('\n'));
-                pushOut = out.toString();
-                pushed = true;
-                log.info("Pushed {} -> origin/{} for {}", sha, branch, asset.id());
-            }
-            return new CommitResult(asset.id(), branch, sha, files, pushed, pushOut,
-                suggestPullRequest(asset, branch));
-        }
-    }
-
-    private static String suggestPullRequest(Asset asset, String branch) {
-        String fullName = GitHubUrlParser.fullName(asset.repoUrl());
-        if (fullName == null) return null;
-        return "https://github.com/" + fullName + "/pull/new/" + branch;
+        String msg = (message == null || message.isBlank())
+            ? "devportal: scaffold k8s manifests + Dockerfile" : message;
+        return committer.commit(asset.id(), branch, msg, List.of("k8s", "Dockerfile"), push);
     }
 
     private static void copyTreeOver(Path source, Path target) throws IOException {
