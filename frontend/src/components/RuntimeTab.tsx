@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type DockerContainer } from '../api';
+import { WorkspaceTerminalModal } from './WorkspaceTerminal';
 
 export function RuntimeTab({ assetId }: { assetId: string }) {
   const queryClient = useQueryClient();
@@ -45,14 +47,7 @@ export function RuntimeTab({ assetId }: { assetId: string }) {
     mutationFn: (name: string) => api.dockerStop(assetId, name),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['docker-containers', assetId] }),
   });
-  const k8sApply = useMutation({
-    mutationFn: () => api.k8sApply(assetId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['k8s-status', assetId] }),
-  });
-  const k8sDelete = useMutation({
-    mutationFn: () => api.k8sDelete(assetId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['k8s-status', assetId] }),
-  });
+  // k8s apply/delete mutations now live inside K8sSection so we can show their output inline.
 
   return (
     <div className="space-y-4">
@@ -177,81 +172,682 @@ export function RuntimeTab({ assetId }: { assetId: string }) {
       </section>
 
       {/* K8s */}
-      <section className="rounded border border-gray-200 bg-white p-4">
-        <header className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-medium text-gray-900">Kubernetes</h2>
-          <div className="flex gap-2 text-xs">
-            <button
-              onClick={() => k8sApply.mutate()}
-              className="rounded bg-blue-600 px-2 py-1 text-white hover:bg-blue-700"
-              disabled={k8sApply.isPending}
+      <K8sSection assetId={assetId} k8sStatusData={k8sStatus.data} k8sLinksData={k8sLinks.data} />
+
+      {/* Port forwards */}
+      <PortForwardsCard assetId={assetId} />
+
+      {/* Endpoints */}
+      <EndpointsCard assetId={assetId} />
+    </div>
+  );
+}
+
+function PortForwardsCard({ assetId }: { assetId: string }) {
+  const queryClient = useQueryClient();
+  const forwards = useQuery({
+    queryKey: ['port-forwards', assetId],
+    queryFn: () => api.listPortForwardsForAsset(assetId),
+    refetchInterval: 3_000,
+  });
+  const pods = useQuery({
+    queryKey: ['k8s-pods', assetId],
+    queryFn: () => api.k8sPods(assetId),
+    retry: false,
+  });
+
+  const [showForm, setShowForm] = useState(false);
+  const [pod, setPod] = useState('');
+  const [containerPort, setContainerPort] = useState('8080');
+  const [hostPort, setHostPort] = useState('');
+
+  const start = useMutation({
+    mutationFn: () =>
+      api.startPortForward(assetId, {
+        podName: pod,
+        containerPort: parseInt(containerPort, 10),
+        hostPort: hostPort.trim() ? parseInt(hostPort, 10) : undefined,
+      }),
+    onSuccess: () => {
+      setShowForm(false);
+      setHostPort('');
+      queryClient.invalidateQueries({ queryKey: ['port-forwards', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['port-forwards-all'] });
+      queryClient.invalidateQueries({ queryKey: ['endpoints', assetId] });
+    },
+  });
+  const stop = useMutation({
+    mutationFn: (id: number) => api.stopPortForward(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['port-forwards', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['port-forwards-all'] });
+    },
+  });
+
+  return (
+    <section className="rounded border border-gray-200 bg-white p-4">
+      <header className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-medium text-gray-900">
+          Port forwards
+          <span className="ml-2 text-xs font-normal text-gray-500">
+            tunnels a pod port to localhost via <code>kubectl port-forward</code>
+          </span>
+        </h2>
+        <button
+          onClick={() => {
+            setShowForm((v) => !v);
+            if (!pod && pods.data?.[0]) setPod(pods.data[0].name);
+          }}
+          disabled={!pods.data || pods.data.length === 0}
+          className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+          title={!pods.data || pods.data.length === 0 ? 'No pods yet — kubectl apply first' : undefined}
+        >
+          {showForm ? 'Cancel' : '+ Add forward'}
+        </button>
+      </header>
+
+      {showForm && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (pod && containerPort) start.mutate();
+          }}
+          className="mb-3 grid grid-cols-3 gap-2 rounded border border-blue-200 bg-blue-50 p-3 text-sm"
+        >
+          <label>
+            <span className="block text-xs font-medium text-gray-700">Pod</span>
+            <select
+              value={pod}
+              onChange={(e) => setPod(e.target.value)}
+              className="w-full rounded border border-gray-300 px-2 py-1 text-xs font-mono"
             >
-              kubectl apply
-            </button>
+              {(pods.data ?? []).map((p) => (
+                <option key={p.name} value={p.name}>{p.name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="block text-xs font-medium text-gray-700">Container port</span>
+            {(() => {
+              const sel = (pods.data ?? []).find((p) => p.name === pod);
+              const opts: { port: number; label: string }[] = [];
+              if (sel) {
+                for (const c of sel.containers) {
+                  for (const port of c.ports) opts.push({ port, label: `${port} (${c.name})` });
+                }
+              }
+              if (opts.length === 0) {
+                return (
+                  <input
+                    type="number"
+                    value={containerPort}
+                    onChange={(e) => setContainerPort(e.target.value)}
+                    required
+                    className="w-full rounded border border-gray-300 px-2 py-1 text-xs font-mono"
+                  />
+                );
+              }
+              return (
+                <select
+                  value={containerPort}
+                  onChange={(e) => setContainerPort(e.target.value)}
+                  className="w-full rounded border border-gray-300 px-2 py-1 text-xs font-mono"
+                >
+                  {opts.map((o, i) => (
+                    <option key={i} value={String(o.port)}>{o.label}</option>
+                  ))}
+                </select>
+              );
+            })()}
+          </label>
+          <label>
+            <span className="block text-xs font-medium text-gray-700">Host port (blank = auto)</span>
+            <input
+              type="number"
+              value={hostPort}
+              onChange={(e) => setHostPort(e.target.value)}
+              placeholder="auto"
+              className="w-full rounded border border-gray-300 px-2 py-1 text-xs font-mono"
+            />
+          </label>
+          <div className="col-span-3">
             <button
-              onClick={() => k8sDelete.mutate()}
-              className="rounded border border-red-300 px-2 py-1 text-red-700 hover:bg-red-50"
-              disabled={k8sDelete.isPending}
+              type="submit"
+              disabled={start.isPending || !pod}
+              className="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
             >
-              kubectl delete
+              {start.isPending ? 'Starting…' : 'Start forward'}
             </button>
-          </div>
-        </header>
-        {(k8sApply.error || k8sDelete.error || k8sStatus.error) && (
-          <p className="mb-2 text-sm text-red-600">
-            {((k8sApply.error || k8sDelete.error || k8sStatus.error) as Error)?.message}
-          </p>
-        )}
-        {k8sStatus.data && (
-          <div className="text-sm">
-            <p className="text-xs text-gray-500">Namespace: {k8sStatus.data.namespace}</p>
-            <h3 className="mt-2 text-xs font-medium uppercase text-gray-500">Pods</h3>
-            {k8sStatus.data.pods.length === 0 ? (
-              <p className="text-gray-500">none</p>
-            ) : (
-              <ul>
-                {k8sStatus.data.pods.map((p) => (
-                  <li key={p.name} className="font-mono">
-                    {p.name} <span className="text-xs text-gray-500">{p.phase}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <h3 className="mt-2 text-xs font-medium uppercase text-gray-500">Services</h3>
-            {k8sStatus.data.services.length === 0 ? (
-              <p className="text-gray-500">none</p>
-            ) : (
-              <ul>
-                {k8sStatus.data.services.map((s) => (
-                  <li key={s.name} className="font-mono">
-                    {s.name}{' '}
-                    <span className="text-xs text-gray-500">
-                      {s.type} :{s.ports.join(',')}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+            {start.error && (
+              <span className="ml-2 text-xs text-red-600">{(start.error as Error).message}</span>
             )}
           </div>
-        )}
-        {k8sLinks.data && (
-          <div className="mt-3 space-y-1 text-xs">
-            <p className="font-medium text-gray-700">Monitoring</p>
-            <code className="block rounded bg-gray-100 px-2 py-1">{k8sLinks.data.k9s}</code>
-            <code className="block rounded bg-gray-100 px-2 py-1">{k8sLinks.data.kubectlLogs}</code>
-            {k8sLinks.data.grafana && (
-              <a
-                href={k8sLinks.data.grafana}
-                target="_blank"
-                rel="noreferrer"
-                className="text-blue-700 hover:underline"
+        </form>
+      )}
+
+      {forwards.data && forwards.data.length === 0 && (
+        <p className="text-sm text-gray-500">No active port-forwards.</p>
+      )}
+      {forwards.data && forwards.data.length > 0 && (
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs uppercase text-gray-500">
+            <tr>
+              <th className="py-1">Status</th>
+              <th className="py-1">URL</th>
+              <th className="py-1">Target</th>
+              <th className="py-1"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {forwards.data.map((f) => (
+              <tr key={f.id} className="border-t border-gray-100">
+                <td className="py-1">
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-xs ${
+                      f.status === 'running'
+                        ? 'bg-green-100 text-green-800'
+                        : f.status === 'failed'
+                        ? 'bg-red-100 text-red-800'
+                        : 'bg-gray-200 text-gray-700'
+                    }`}
+                  >
+                    {f.status}
+                  </span>
+                </td>
+                <td className="py-1 font-mono text-xs">
+                  <a
+                    href={`http://localhost:${f.hostPort}/`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-700 hover:underline"
+                  >
+                    http://localhost:{f.hostPort}/
+                  </a>
+                </td>
+                <td className="py-1 font-mono text-xs">
+                  {f.namespace}/{f.podName}:{f.containerPort}
+                </td>
+                <td className="py-1 text-right">
+                  {f.status === 'running' && (
+                    <button
+                      onClick={() => stop.mutate(f.id)}
+                      className="text-xs text-red-600 hover:underline"
+                    >
+                      stop
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function K8sSection({
+  assetId,
+  k8sStatusData,
+  k8sLinksData,
+}: {
+  assetId: string;
+  k8sStatusData: { namespace: string; pods: { name: string; phase: string }[]; services: { name: string; type: string; ports: number[] }[] } | undefined;
+  k8sLinksData: { k9s: string; grafana: string | null; kubectlLogs: string } | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const apply = useMutation({
+    mutationFn: () => api.k8sApply(assetId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['k8s-status', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['k8s-pods', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['endpoints', assetId] });
+    },
+  });
+  const k8sDelete = useMutation({
+    mutationFn: () => api.k8sDelete(assetId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['k8s-status', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['k8s-pods', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['endpoints', assetId] });
+    },
+  });
+
+  const scaffold = useMutation({
+    mutationFn: () => api.k8sScaffold(assetId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['panels', assetId] }),
+  });
+  const render = useMutation({ mutationFn: () => api.k8sRender(assetId) });
+
+  const verifyM = useMutation({ mutationFn: () => api.verifyAsset(assetId, 'docker') });
+
+  const [commitOpen, setCommitOpen] = useState(false);
+  const [commitMode, setCommitMode] = useState<'render' | 'workspace'>('render');
+  const [branch, setBranch] = useState('');
+  const [message, setMessage] = useState('');
+  const [push, setPush] = useState(false);
+  const [shellOpen, setShellOpen] = useState(false);
+  const commit = useMutation({
+    mutationFn: () =>
+      commitMode === 'render'
+        ? api.k8sCommitRender(assetId, branch || undefined, message || undefined, push)
+        : api.k8sCommitWorkspace(assetId, branch || undefined, message || undefined, push),
+  });
+
+  return (
+    <section className="rounded border border-gray-200 bg-white p-4">
+      <header className="mb-2 flex items-center justify-between flex-wrap gap-2">
+        <h2 className="text-sm font-medium text-gray-900">Kubernetes</h2>
+        <div className="flex gap-2 text-xs flex-wrap">
+          <button
+            onClick={() => scaffold.mutate()}
+            className="rounded bg-amber-600 px-2 py-1 text-white hover:bg-amber-700"
+            disabled={scaffold.isPending}
+            title="Generate k8s/deployment.yaml + k8s/service.yaml from inferred ports (no commit)"
+          >
+            {scaffold.isPending ? 'Scaffolding…' : 'Scaffold k8s'}
+          </button>
+          <button
+            onClick={() => render.mutate()}
+            className="rounded border border-gray-300 px-2 py-1 text-gray-700 hover:bg-gray-100"
+            disabled={render.isPending}
+            title="Render manifests with allocated NodePorts (no apply)"
+          >
+            {render.isPending ? 'Rendering…' : 'Render preview'}
+          </button>
+          <button
+            onClick={() => { setCommitOpen(true); setCommitMode('render'); }}
+            className="rounded bg-purple-600 px-2 py-1 text-white hover:bg-purple-700"
+          >
+            Commit to branch
+          </button>
+          <button
+            onClick={() => verifyM.mutate()}
+            className="rounded bg-green-600 px-2 py-1 text-white hover:bg-green-700"
+            disabled={verifyM.isPending}
+            title="Build → run → http probe (docker stage)"
+          >
+            {verifyM.isPending ? 'Verifying…' : 'Verify'}
+          </button>
+          <button
+            onClick={() => apply.mutate()}
+            className="rounded bg-blue-600 px-2 py-1 text-white hover:bg-blue-700"
+            disabled={apply.isPending}
+          >
+            {apply.isPending ? 'Applying…' : 'kubectl apply'}
+          </button>
+          <button
+            onClick={() => k8sDelete.mutate()}
+            className="rounded border border-red-300 px-2 py-1 text-red-700 hover:bg-red-50"
+            disabled={k8sDelete.isPending}
+          >
+            kubectl delete
+          </button>
+          <button
+            onClick={() => setShellOpen(true)}
+            className="rounded bg-slate-700 px-2 py-1 text-white hover:bg-slate-800"
+            title="Open a host shell rooted at this asset's workspace"
+          >
+            Workspace shell
+          </button>
+        </div>
+      </header>
+
+      <WorkspaceTerminalModal assetId={assetId} open={shellOpen} onClose={() => setShellOpen(false)} />
+
+      {scaffold.data && (
+        <div className="mb-2 rounded border border-amber-200 bg-amber-50 p-2 text-xs">
+          Scaffolded: {scaffold.data.files.join(', ')}. Click <em>Commit to branch</em> with mode "workspace" to ship them.
+        </div>
+      )}
+      {scaffold.error && <p className="mb-2 text-sm text-red-600">{(scaffold.error as Error).message}</p>}
+
+      {render.data && (
+        <div className="mb-2 rounded border border-gray-200 bg-gray-50 p-2 text-xs">
+          Rendered to <code className="font-mono">{render.data.renderedDir}</code> (source: {render.data.source}).
+        </div>
+      )}
+      {render.error && <p className="mb-2 text-sm text-red-600">{(render.error as Error).message}</p>}
+
+      {verifyM.data && (
+        <div className={`mb-2 rounded border p-2 text-xs ${verifyM.data.passed ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+          <div className="font-medium">
+            {verifyM.data.passed ? '✅ verify passed' : `❌ verify failed at ${verifyM.data.failedAt}`}
+            {' — '} {verifyM.data.summary}
+          </div>
+          <ul className="mt-1 font-mono">
+            {verifyM.data.steps.map((s, i) => (
+              <li key={i}>
+                {s.ok ? '✓' : '✗'} {s.name} ({s.durationMs}ms) — {s.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {verifyM.error && <p className="mb-2 text-sm text-red-600">{(verifyM.error as Error).message}</p>}
+
+      {(apply.data || apply.error || k8sDelete.data || k8sDelete.error) && (
+        <div
+          className={`mb-2 rounded border p-2 text-xs ${
+            apply.error || k8sDelete.error ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'
+          }`}
+        >
+          {apply.data && (() => {
+            const out = String(apply.data.output ?? '');
+            const lines = out.split('\n').filter(Boolean);
+            const resources = lines
+              .map((l) => l.match(/^(\S+\/\S+)\s+(\w+)/))
+              .filter(Boolean)
+              .map((m) => ({ resource: m![1], action: m![2].toUpperCase() }));
+            return (
+              <>
+                <div className="font-medium">
+                  ✅ kubectl apply — namespace <code className="font-mono">{String(apply.data.namespace ?? 'default')}</code>
+                </div>
+                {resources.length > 0 ? (
+                  <ul className="mt-1 font-mono text-xs">
+                    {resources.map((r, i) => (
+                      <li key={i}>
+                        <span className={r.action === 'CREATED' ? 'text-green-700' : r.action === 'UNCHANGED' ? 'text-gray-500' : 'text-blue-700'}>
+                          {r.action.padEnd(10)}
+                        </span>
+                        <span>{r.resource}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <pre className="mt-1 whitespace-pre-wrap font-mono">{out}</pre>
+                )}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <a
+                    href="#cluster"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      window.dispatchEvent(new CustomEvent('devportal:goto-tab', { detail: 'cluster' }));
+                    }}
+                    className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700"
+                  >
+                    View resources in cluster →
+                  </a>
+                  <button
+                    onClick={() => setShellOpen(true)}
+                    className="rounded bg-slate-700 px-2 py-1 text-xs text-white hover:bg-slate-800"
+                  >
+                    Open workspace shell
+                  </button>
+                </div>
+              </>
+            );
+          })()}
+          {apply.error && <p className="text-red-700">apply failed: {(apply.error as Error).message}</p>}
+          {k8sDelete.data && (
+            <>
+              <div className="font-medium">🗑 kubectl delete</div>
+              <pre className="mt-1 whitespace-pre-wrap font-mono">{String(k8sDelete.data.output ?? '')}</pre>
+            </>
+          )}
+          {k8sDelete.error && <p className="text-red-700">delete failed: {(k8sDelete.error as Error).message}</p>}
+        </div>
+      )}
+
+      {commitOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-lg bg-white shadow-xl">
+            <header className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+              <h3 className="text-sm font-medium text-gray-900">Commit k8s changes — {assetId}</h3>
+              <button onClick={() => setCommitOpen(false)} className="text-gray-500">✕</button>
+            </header>
+            <div className="space-y-3 px-4 py-3 text-sm">
+              <label className="block">
+                <span className="text-xs font-medium text-gray-700">Source</span>
+                <select
+                  value={commitMode}
+                  onChange={(e) => setCommitMode(e.target.value as 'render' | 'workspace')}
+                  className="mt-1 w-full rounded border border-gray-300 px-3 py-1.5"
+                >
+                  <option value="render">Render: rewrite originals with allocated NodePorts</option>
+                  <option value="workspace">Workspace: commit current edits (e.g. after Scaffold)</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-gray-700">Branch</span>
+                <input
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  placeholder="devportal/k8s-... (auto-named if blank)"
+                  className="mt-1 w-full rounded border border-gray-300 px-3 py-1.5 font-mono text-xs"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-gray-700">Commit message</span>
+                <input
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  placeholder="devportal: update k8s manifests with allocated ports"
+                  className="mt-1 w-full rounded border border-gray-300 px-3 py-1.5"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={push} onChange={(e) => setPush(e.target.checked)} />
+                Push branch to <code>origin</code> after commit (uses your stored PAT)
+              </label>
+              {commit.data && (
+                <div className="rounded border border-green-200 bg-green-50 p-2 text-xs">
+                  Committed <code>{commit.data.commit?.slice(0, 7) ?? '(no changes)'}</code> on <code>{commit.data.branch}</code>
+                  {commit.data.filesChanged.length > 0 && <> — {commit.data.filesChanged.length} file(s)</>}
+                  {commit.data.pushed && <div className="text-green-700">Pushed to origin/{commit.data.branch}</div>}
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {commit.data.prSuggestion && (
+                      <a href={commit.data.prSuggestion} target="_blank" rel="noreferrer" className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700">
+                        Open PR →
+                      </a>
+                    )}
+                    <button
+                      onClick={() => setShellOpen(true)}
+                      className="rounded bg-slate-700 px-2 py-1 text-xs text-white hover:bg-slate-800"
+                      title={`Open shell at branch ${commit.data.branch}`}
+                    >
+                      Open shell on {commit.data.branch}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {commit.error && <p className="text-xs text-red-600">{(commit.error as Error).message}</p>}
+            </div>
+            <footer className="flex items-center justify-end gap-2 border-t border-gray-200 px-4 py-3">
+              <button onClick={() => setCommitOpen(false)} className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100">
+                Close
+              </button>
+              <button
+                onClick={() => commit.mutate()}
+                disabled={commit.isPending}
+                className="rounded bg-purple-600 px-3 py-1.5 text-sm text-white hover:bg-purple-700 disabled:opacity-50"
               >
-                Open Grafana →
-              </a>
-            )}
+                {commit.isPending ? 'Committing…' : push ? 'Commit & push' : 'Commit (local only)'}
+              </button>
+            </footer>
           </div>
-        )}
-      </section>
+        </div>
+      )}
+
+      {k8sStatusData && (
+        <div className="text-sm">
+          <p className="text-xs text-gray-500">Namespace: {k8sStatusData.namespace}</p>
+          <h3 className="mt-2 text-xs font-medium uppercase text-gray-500">Pods</h3>
+          {k8sStatusData.pods.length === 0 ? (
+            <p className="text-gray-500">none</p>
+          ) : (
+            <ul>
+              {k8sStatusData.pods.map((p) => (
+                <li key={p.name} className="font-mono">
+                  {p.name} <span className="text-xs text-gray-500">{p.phase}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <h3 className="mt-2 text-xs font-medium uppercase text-gray-500">Services</h3>
+          {k8sStatusData.services.length === 0 ? (
+            <p className="text-gray-500">none</p>
+          ) : (
+            <ul>
+              {k8sStatusData.services.map((s) => (
+                <li key={s.name} className="font-mono">
+                  {s.name}{' '}
+                  <span className="text-xs text-gray-500">
+                    {s.type} :{s.ports.join(',')}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {k8sLinksData && (
+        <div className="mt-3 space-y-1 text-xs">
+          <p className="font-medium text-gray-700">Monitoring</p>
+          <code className="block rounded bg-gray-100 px-2 py-1">{k8sLinksData.k9s}</code>
+          <code className="block rounded bg-gray-100 px-2 py-1">{k8sLinksData.kubectlLogs}</code>
+          {k8sLinksData.grafana && (
+            <a
+              href={k8sLinksData.grafana}
+              target="_blank"
+              rel="noreferrer"
+              className="text-blue-700 hover:underline"
+            >
+              Open Grafana →
+            </a>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function EndpointsCard({ assetId }: { assetId: string }) {
+  const queryClient = useQueryClient();
+  const ep = useQuery({
+    queryKey: ['endpoints', assetId],
+    queryFn: () => api.endpoints(assetId),
+    refetchInterval: 5000,
+  });
+  const expose = useMutation({
+    mutationFn: (vars: { podName: string; containerPort: number }) =>
+      api.startPortForward(assetId, vars),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['endpoints', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['port-forwards', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['port-forwards-all'] });
+    },
+  });
+  if (ep.isLoading) return null;
+  if (ep.error) return null;
+  const eps = ep.data?.endpoints ?? [];
+
+  // Group by host-accessibility — what the user really wants to know.
+  const hostAccessible = eps.filter((e) => e.hostAccessible);
+  const inCluster = eps.filter((e) => !e.hostAccessible && e.scope !== 'external');
+  const external = eps.filter((e) => e.scope === 'external');
+
+  return (
+    <section className="rounded border border-gray-200 bg-white p-4">
+      <header className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-medium text-gray-900">Endpoints</h2>
+        <span className="text-xs text-gray-500">{eps.length} URL{eps.length === 1 ? '' : 's'}</span>
+      </header>
+      {eps.length === 0 && (
+        <p className="text-sm text-gray-500">
+          No URLs derivable yet. Allocate ports / apply k8s / register a repo URL to populate this list.
+        </p>
+      )}
+
+      {hostAccessible.length > 0 && (
+        <Group title="🟢 Host accessible — open these from your browser" rows={hostAccessible} accent="green" />
+      )}
+      {inCluster.length > 0 && (
+        <Group
+          title="🔒 In-cluster only — not reachable from your host as-is"
+          rows={inCluster}
+          accent="amber"
+          onExpose={(hint) =>
+            expose.mutate({ podName: hint.podName, containerPort: hint.containerPort })
+          }
+        />
+      )}
+      {external.length > 0 && (
+        <Group title="🔗 External" rows={external} accent="gray" />
+      )}
+      {expose.error && (
+        <p className="mt-2 text-xs text-red-600">expose failed: {(expose.error as Error).message}</p>
+      )}
+      {expose.data && (
+        <p className="mt-2 text-xs text-green-700">
+          Started port-forward → http://localhost:{expose.data.hostPort}/
+        </p>
+      )}
+    </section>
+  );
+}
+
+function Group({
+  title,
+  rows,
+  accent,
+  onExpose,
+}: {
+  title: string;
+  rows: NonNullable<Awaited<ReturnType<typeof api.endpoints>>>['endpoints'];
+  accent: 'green' | 'amber' | 'gray';
+  onExpose?: (hint: { podName: string; containerPort: number }) => void;
+}) {
+  const headerCls =
+    accent === 'green'
+      ? 'bg-green-50 border-green-200 text-green-900'
+      : accent === 'amber'
+      ? 'bg-amber-50 border-amber-200 text-amber-900'
+      : 'bg-gray-50 border-gray-200 text-gray-700';
+  return (
+    <div className={`mb-3 rounded border ${headerCls}`}>
+      <h3 className="border-b border-current/10 px-3 py-1 text-xs font-medium">{title}</h3>
+      <ul className="divide-y divide-current/10">
+        {rows.map((e, i) => (
+          <li key={i} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] ${
+                e.live ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-600'
+              }`}
+              title={e.live ? 'something is currently listening' : 'nothing listening yet'}
+            >
+              {e.live ? 'live' : 'idle'}
+            </span>
+            <span className="font-medium">{e.label}</span>
+            <a
+              href={e.url}
+              target="_blank"
+              rel="noreferrer"
+              className="font-mono text-blue-700 hover:underline truncate"
+            >
+              {e.url}
+            </a>
+            <button
+              onClick={() => navigator.clipboard.writeText(e.url)}
+              className="text-gray-400 hover:text-gray-700"
+              title="Copy URL"
+            >
+              ⧉
+            </button>
+            {e.exposeHint && onExpose && (
+              <button
+                onClick={() => onExpose(e.exposeHint!)}
+                className="rounded bg-blue-600 px-1.5 py-0.5 text-[10px] text-white hover:bg-blue-700"
+                title="Start kubectl port-forward to expose this on a host port"
+              >
+                Expose to host
+              </button>
+            )}
+            <span className="ml-auto text-[10px] text-gray-500">{e.origin}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

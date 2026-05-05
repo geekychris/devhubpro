@@ -31,6 +31,7 @@ public class AssetRepository {
         rs.getString("repo_default_branch"),
         readStringArray(rs, "tags"),
         rs.getString("lifecycle"),
+        rs.getString("k8s_namespace"),
         toInstant(rs.getTimestamp("created_at")),
         toInstant(rs.getTimestamp("updated_at"))
     );
@@ -56,16 +57,40 @@ public class AssetRepository {
     );
 
     public List<Asset> findAll(String query, String type, String lifecycle) {
+        boolean hasQuery = query != null && !query.isBlank();
+
         StringBuilder sql = new StringBuilder("SELECT * FROM asset WHERE 1=1");
-        if (query != null && !query.isBlank()) {
-            sql.append(" AND (id ILIKE :q OR name ILIKE :q OR coalesce(description,'') ILIKE :q)");
+        if (hasQuery) {
+            sql.append(" AND (");
+            sql.append("id ILIKE :q OR name ILIKE :q OR coalesce(description,'') ILIKE :q");
+            sql.append(" OR EXISTS (SELECT 1 FROM unnest(tags) t WHERE t ILIKE :q)");
+            sql.append(")");
         }
         if (type != null && !type.isBlank()) sql.append(" AND type = :type");
         if (lifecycle != null && !lifecycle.isBlank()) sql.append(" AND lifecycle = :lifecycle");
-        sql.append(" ORDER BY id");
+
+        // Ranking: lower is better. Bias the asset id and name above description/tags.
+        if (hasQuery) {
+            sql.append(" ORDER BY CASE");
+            sql.append(" WHEN id ILIKE :exact THEN 0");
+            sql.append(" WHEN id ILIKE :prefix THEN 1");
+            sql.append(" WHEN name ILIKE :exact THEN 2");
+            sql.append(" WHEN name ILIKE :prefix THEN 3");
+            sql.append(" WHEN id ILIKE :q THEN 4");
+            sql.append(" WHEN name ILIKE :q THEN 5");
+            sql.append(" WHEN EXISTS (SELECT 1 FROM unnest(tags) t WHERE t ILIKE :exact) THEN 6");
+            sql.append(" WHEN coalesce(description,'') ILIKE :q THEN 7");
+            sql.append(" ELSE 8 END, id");
+        } else {
+            sql.append(" ORDER BY id");
+        }
 
         var spec = jdbc.sql(sql.toString());
-        if (query != null && !query.isBlank()) spec = spec.param("q", "%" + query + "%");
+        if (hasQuery) {
+            spec = spec.param("q", "%" + query + "%");
+            spec = spec.param("exact", query);
+            spec = spec.param("prefix", query + "%");
+        }
         if (type != null && !type.isBlank()) spec = spec.param("type", type);
         if (lifecycle != null && !lifecycle.isBlank()) spec = spec.param("lifecycle", lifecycle);
         return spec.query(ASSET).list();
@@ -89,9 +114,9 @@ public class AssetRepository {
     public void insert(Asset a) {
         jdbc.sql("""
             INSERT INTO asset (id, name, description, owner, type, language, repo_url,
-                               repo_default_branch, tags, lifecycle)
+                               repo_default_branch, tags, lifecycle, k8s_namespace)
             VALUES (:id, :name, :description, :owner, :type, :language, :repo_url,
-                    :branch, :tags, :lifecycle)
+                    :branch, :tags, :lifecycle, :ns)
             """)
             .param("id", a.id())
             .param("name", a.name())
@@ -103,6 +128,7 @@ public class AssetRepository {
             .param("branch", a.repoDefaultBranch() == null ? "main" : a.repoDefaultBranch())
             .param("tags", a.tags() == null ? new String[0] : a.tags().toArray(String[]::new))
             .param("lifecycle", a.lifecycle() == null ? "experimental" : a.lifecycle())
+            .param("ns", a.k8sNamespace() != null ? a.k8sNamespace() : a.id())
             .update();
     }
 
@@ -117,7 +143,8 @@ public class AssetRepository {
               repo_url = :repo_url,
               repo_default_branch = :branch,
               tags = :tags,
-              lifecycle = :lifecycle
+              lifecycle = :lifecycle,
+              k8s_namespace = :ns
             WHERE id = :id
             """)
             .param("id", a.id())
@@ -130,6 +157,7 @@ public class AssetRepository {
             .param("branch", a.repoDefaultBranch() == null ? "main" : a.repoDefaultBranch())
             .param("tags", a.tags() == null ? new String[0] : a.tags().toArray(String[]::new))
             .param("lifecycle", a.lifecycle())
+            .param("ns", a.k8sNamespace())
             .update();
     }
 

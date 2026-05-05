@@ -65,6 +65,7 @@ public class AssetService {
             r.repoDefaultBranch() == null ? "main" : r.repoDefaultBranch(),
             r.tags() == null ? List.of() : r.tags(),
             r.lifecycle() == null ? "experimental" : r.lifecycle(),
+            r.id(),     // default namespace = asset id
             null, null
         );
         repo.insert(a);
@@ -85,6 +86,7 @@ public class AssetService {
             r.repoDefaultBranch() != null ? r.repoDefaultBranch() : existing.repoDefaultBranch(),
             r.tags() != null ? r.tags() : existing.tags(),
             r.lifecycle() != null ? r.lifecycle() : existing.lifecycle(),
+            r.k8sNamespace() != null ? r.k8sNamespace() : existing.k8sNamespace(),
             existing.createdAt(),
             Instant.now()
         );
@@ -233,7 +235,7 @@ public class AssetService {
 
         Asset a = new Asset(id, name, description, owner, type, language,
             summary.htmlUrl(), summary.defaultBranch(),
-            tags, lifecycle, null, null);
+            tags, lifecycle, id /* default namespace = asset id */, null, null);
         repo.insert(a);
         return AssetView.of(repo.findById(id).orElseThrow());
     }

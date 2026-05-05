@@ -90,6 +90,10 @@ export function BuildsTab({ assetId }: { assetId: string }) {
         </div>
       </section>
 
+      {builds.data && builds.data.length > 0 && (
+        <LatestBanner builds={builds.data} />
+      )}
+
       <section className="rounded border border-gray-200 bg-white">
         <h2 className="border-b border-gray-200 px-4 py-2 text-sm font-medium text-gray-900">Recent builds</h2>
         {builds.data && builds.data.length === 0 && (
@@ -98,22 +102,16 @@ export function BuildsTab({ assetId }: { assetId: string }) {
         {builds.data && builds.data.length > 0 && (
           <ul className="divide-y divide-gray-100">
             {builds.data.map((b) => (
-              <li key={b.id}>
-                <button
-                  onClick={() => setSelectedId(b.id)}
-                  className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm hover:bg-gray-50 ${
-                    selectedId === b.id ? 'bg-blue-50' : ''
-                  }`}
-                >
-                  <div>
-                    <div className="font-mono text-xs">#{b.id} · {b.commandName}</div>
-                    <div className="text-xs text-gray-500">
-                      {b.gitRef} · {new Date(b.createdAt).toLocaleString()}
-                    </div>
-                  </div>
-                  <StatusBadge status={b.status} exitCode={b.exitCode} />
-                </button>
-              </li>
+              <BuildRow
+                key={b.id}
+                build={b}
+                selected={selectedId === b.id}
+                onSelect={() => setSelectedId(b.id)}
+                onDeleted={() => {
+                  if (selectedId === b.id) setSelectedId(null);
+                  queryClient.invalidateQueries({ queryKey: ['builds', assetId] });
+                }}
+              />
             ))}
           </ul>
         )}
@@ -212,6 +210,98 @@ function SegmentLog({ buildId, status }: { buildId: number; status: Build['statu
     <pre className="max-h-72 overflow-auto bg-gray-900 px-4 py-3 font-mono text-xs leading-relaxed text-gray-100">
       {log ?? 'Loading…'}
     </pre>
+  );
+}
+
+function LatestBanner({ builds }: { builds: Build[] }) {
+  const latest = builds[0];
+  const lastSuccess = builds.find((b) => b.status === 'succeeded');
+  const failedCount = builds.filter((b) => b.status === 'failed').length;
+  const ok = latest.status === 'succeeded';
+  return (
+    <div
+      className={`rounded border px-3 py-2 text-sm ${
+        ok
+          ? 'border-green-200 bg-green-50'
+          : latest.status === 'failed'
+          ? 'border-red-200 bg-red-50'
+          : 'border-blue-200 bg-blue-50'
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <span className="font-medium">
+          Latest: <code className="font-mono">#{latest.id}</code>
+        </span>
+        <StatusBadge status={latest.status} exitCode={latest.exitCode} />
+        <span className="text-xs text-gray-600">{latest.commandName}</span>
+        <span className="ml-auto text-xs text-gray-500">
+          {new Date(latest.createdAt).toLocaleString()}
+        </span>
+      </div>
+      {!ok && lastSuccess && (
+        <div className="mt-1 text-xs text-gray-600">
+          Last successful: <code className="font-mono">#{lastSuccess.id}</code> ({lastSuccess.commandName}) at{' '}
+          {new Date(lastSuccess.createdAt).toLocaleString()}
+        </div>
+      )}
+      {failedCount > 0 && (
+        <div className="mt-1 text-xs text-gray-600">
+          {failedCount} failed build record{failedCount === 1 ? '' : 's'} in history (delete to clean up).
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BuildRow({
+  build: b,
+  selected,
+  onSelect,
+  onDeleted,
+}: {
+  build: Build;
+  selected: boolean;
+  onSelect: () => void;
+  onDeleted: () => void;
+}) {
+  const del = useMutation({
+    mutationFn: () => api.deleteBuild(b.id),
+    onSuccess: onDeleted,
+  });
+  return (
+    <li>
+      <div
+        className={`flex items-center justify-between px-4 py-2 text-sm hover:bg-gray-50 ${
+          selected ? 'bg-blue-50' : ''
+        }`}
+      >
+        <button onClick={onSelect} className="flex-1 text-left">
+          <div className="font-mono text-xs">#{b.id} · {b.commandName}</div>
+          <div className="text-xs text-gray-500">
+            {b.gitRef} · {new Date(b.createdAt).toLocaleString()}
+          </div>
+        </button>
+        <div className="flex items-center gap-2">
+          <StatusBadge status={b.status} exitCode={b.exitCode} />
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (b.status === 'running' || b.status === 'queued') return;
+              if (confirm(`Delete build #${b.id}? Log file will be removed too.`)) del.mutate();
+            }}
+            disabled={b.status === 'running' || b.status === 'queued' || del.isPending}
+            title={
+              b.status === 'running' || b.status === 'queued'
+                ? "Can't delete a running build"
+                : 'Delete this build record'
+            }
+            className="rounded px-1.5 py-0.5 text-xs text-gray-400 hover:bg-red-100 hover:text-red-700 disabled:opacity-30"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    </li>
   );
 }
 

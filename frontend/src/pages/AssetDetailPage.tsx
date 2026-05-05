@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
@@ -10,8 +10,10 @@ import { AnalyzeTab } from '../components/AnalyzeTab';
 import { EditAssetForm } from '../components/EditAssetForm';
 import { AssetOverview } from '../components/AssetOverview';
 import { DocsTab } from '../components/DocsTab';
+import { AskClaudeButton } from '../components/AskClaudeButton';
+import { ClusterTab } from '../components/ClusterTab';
 
-type Tab = 'overview' | 'dependencies' | 'graph' | 'builds' | 'runtime' | 'analyze' | 'docs' | 'panels';
+type Tab = 'overview' | 'dependencies' | 'graph' | 'builds' | 'runtime' | 'cluster' | 'analyze' | 'docs' | 'panels';
 
 export function AssetDetailPage() {
   const { id = '' } = useParams();
@@ -19,6 +21,22 @@ export function AssetDetailPage() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>('overview');
   const [editing, setEditing] = useState(false);
+
+  // Cross-component navigation: components can dispatch a 'devportal:goto-tab' CustomEvent to switch tabs.
+  useEffect(() => {
+    function onGoto(e: Event) {
+      const detail = (e as CustomEvent).detail as Tab;
+      if (
+        detail === 'overview' || detail === 'dependencies' || detail === 'graph' ||
+        detail === 'builds' || detail === 'runtime' || detail === 'cluster' ||
+        detail === 'analyze' || detail === 'docs' || detail === 'panels'
+      ) {
+        setTab(detail);
+      }
+    }
+    window.addEventListener('devportal:goto-tab', onGoto);
+    return () => window.removeEventListener('devportal:goto-tab', onGoto);
+  }, []);
 
   const asset = useQuery({ queryKey: ['asset', id], queryFn: () => api.getAsset(id), enabled: !!id });
   const deps = useQuery({
@@ -85,6 +103,7 @@ export function AssetDetailPage() {
           <p className="text-sm text-gray-500">{a.id}</p>
         </div>
         <div className="flex gap-2">
+          <AskClaudeButton assetId={a.id} />
           <button
             onClick={() => setEditing((v) => !v)}
             className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
@@ -105,7 +124,7 @@ export function AssetDetailPage() {
       {editing && <EditAssetForm asset={a} onClose={() => setEditing(false)} />}
 
       <nav className="flex gap-4 border-b border-gray-200 text-sm">
-        {(['overview', 'dependencies', 'graph', 'builds', 'runtime', 'analyze', 'docs', 'panels'] as const).map((t) => (
+        {(['overview', 'dependencies', 'graph', 'builds', 'runtime', 'cluster', 'analyze', 'docs', 'panels'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -252,6 +271,7 @@ export function AssetDetailPage() {
       )}
       {tab === 'builds' && <BuildsTab assetId={id} />}
       {tab === 'runtime' && <RuntimeTab assetId={id} />}
+      {tab === 'cluster' && <ClusterTab assetId={id} />}
       {tab === 'analyze' && <AnalyzeTab assetId={id} />}
       {tab === 'docs' && <DocsTab assetId={id} />}
       {tab === 'panels' && <PanelsTab assetId={id} />}

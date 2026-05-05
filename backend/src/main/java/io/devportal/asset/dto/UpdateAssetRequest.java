@@ -12,5 +12,6 @@ public record UpdateAssetRequest(
     String repoUrl,
     String repoDefaultBranch,
     List<String> tags,
-    String lifecycle
+    String lifecycle,
+    String k8sNamespace
 ) {}

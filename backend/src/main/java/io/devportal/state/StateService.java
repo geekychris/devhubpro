@@ -162,9 +162,11 @@ public class StateService {
             (String) doc.getOrDefault("repoDefaultBranch", "main"),
             tags,
             (String) doc.getOrDefault("lifecycle", "experimental"),
+            (String) doc.get("k8sNamespace"),
             null, null
         );
     }
+
 
     private Map<String, Object> readDoc(Path file) {
         try {

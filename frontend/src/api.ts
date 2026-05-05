@@ -9,6 +9,7 @@ export type Asset = {
   repoDefaultBranch: string;
   tags: string[];
   lifecycle: 'experimental' | 'stable' | 'deprecated';
+  k8sNamespace: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -190,6 +191,7 @@ export type UpdateAssetBody = Partial<{
   repoDefaultBranch: string;
   tags: string[];
   lifecycle: string;
+  k8sNamespace: string | null;
 }>;
 
 export type GitHubRepoSummary = {
@@ -370,6 +372,7 @@ export const api = {
 
   getBuildChain: (id: number) => request<Build[]>(`/api/builds/${id}/chain`),
   recentBuilds: (limit = 50) => request<Build[]>(`/api/builds?limit=${limit}`),
+  deleteBuild: (id: number) => request<void>(`/api/builds/${id}`, { method: 'DELETE' }),
 
   // ---- ports ----
   listAllPorts: () => request<PortReservation[]>('/api/ports'),
@@ -425,6 +428,66 @@ export const api = {
   k8sStatus: (assetId: string) => request<K8sStatus>(`/api/assets/${assetId}/k8s/status`),
   k8sLinks: (assetId: string) => request<MonitoringLinks>(`/api/assets/${assetId}/k8s/links`),
 
+  endpoints: (assetId: string) =>
+    request<{
+      assetId: string;
+      endpoints: {
+        label: string;
+        url: string;
+        scope: string;
+        origin: string;
+        live: boolean;
+        hostAccessible: boolean;
+        exposeHint: { kind: string; podName: string; containerPort: number } | null;
+      }[];
+    }>(`/api/assets/${assetId}/endpoints`),
+
+  // ---- port-forwards ----
+  listPortForwards: () =>
+    request<{
+      id: number;
+      assetId: string;
+      namespace: string;
+      podName: string;
+      containerPort: number;
+      hostPort: number;
+      status: 'running' | 'stopped' | 'failed';
+      error: string | null;
+      startedAt: string;
+    }[]>('/api/port-forwards'),
+  listPortForwardsForAsset: (assetId: string) =>
+    request<{
+      id: number;
+      assetId: string;
+      namespace: string;
+      podName: string;
+      containerPort: number;
+      hostPort: number;
+      status: 'running' | 'stopped' | 'failed';
+      error: string | null;
+      startedAt: string;
+    }[]>(`/api/assets/${assetId}/port-forwards`),
+  startPortForward: (
+    assetId: string,
+    body: { podName: string; containerPort: number; hostPort?: number }
+  ) =>
+    request<{
+      id: number;
+      assetId: string;
+      namespace: string;
+      podName: string;
+      containerPort: number;
+      hostPort: number;
+      status: 'running' | 'stopped' | 'failed';
+      error: string | null;
+      startedAt: string;
+    }>(`/api/assets/${assetId}/port-forwards`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  stopPortForward: (id: number) =>
+    request<void>(`/api/port-forwards/${id}`, { method: 'DELETE' }),
+
   // ---- bulk import ----
   previewOrgRepos: (owner: string) =>
     request<GitHubRepoSummary[]>(`/api/orgs/${owner}/repos`),
@@ -459,6 +522,116 @@ export const api = {
   },
   search: (q: string, includeDocs = true) =>
     request<SearchResult>(`/api/search?q=${encodeURIComponent(q)}&includeDocs=${includeDocs}`),
+
+  // ---- cluster monitoring ----
+  k8sPods: (assetId: string) =>
+    request<{
+      name: string;
+      namespace: string;
+      phase: string;
+      node: string | null;
+      podIp: string | null;
+      readyContainers: number;
+      totalContainers: number;
+      restartCount: number;
+      startTime: string | null;
+      labels: Record<string, string>;
+      containers: {
+        name: string;
+        image: string;
+        ready: boolean;
+        restartCount: number;
+        state: string;
+        reason: string | null;
+        lastTermReason: string | null;
+        lastTermExitCode: number | null;
+        env: { name: string; value: string }[];
+        ports: number[];
+      }[];
+    }[]>(`/api/assets/${assetId}/k8s/pods`),
+  k8sPodLogs: async (assetId: string, podName: string, container?: string, tail = 200) => {
+    const params = new URLSearchParams({ tail: String(tail) });
+    if (container) params.set('container', container);
+    const res = await fetch(`/api/assets/${assetId}/k8s/pods/${podName}/logs?${params}`);
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+    return res.text();
+  },
+  k8sPodDescribe: async (assetId: string, podName: string) => {
+    const res = await fetch(`/api/assets/${assetId}/k8s/pods/${podName}/describe`);
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+    return res.text();
+  },
+  k8sPodEvents: (assetId: string) =>
+    request<{
+      type: string;
+      reason: string;
+      message: string;
+      source: string | null;
+      firstSeen: string | null;
+      lastSeen: string | null;
+      count: number;
+      involvedObject: string;
+    }[]>(`/api/assets/${assetId}/k8s/events`),
+
+  k8sRender: (assetId: string) =>
+    request<{ asset: string; renderedDir: string; source: string }>(
+      `/api/assets/${assetId}/k8s/render`,
+      { method: 'POST' }
+    ),
+  k8sScaffold: (assetId: string) =>
+    request<{ asset: string; files: string[]; note: string }>(
+      `/api/assets/${assetId}/k8s/scaffold`,
+      { method: 'POST' }
+    ),
+  k8sCommitRender: (assetId: string, branch?: string, message?: string, push = false) => {
+    const params = new URLSearchParams({ push: String(push) });
+    if (branch) params.set('branch', branch);
+    if (message) params.set('message', message);
+    return request<{
+      assetId: string;
+      branch: string;
+      commit: string | null;
+      filesChanged: string[];
+      pushed: boolean;
+      pushOutput: string | null;
+      prSuggestion: string | null;
+    }>(`/api/assets/${assetId}/k8s/commit-render?${params}`, { method: 'POST' });
+  },
+  k8sCommitWorkspace: (assetId: string, branch?: string, message?: string, push = false) => {
+    const params = new URLSearchParams({ push: String(push) });
+    if (branch) params.set('branch', branch);
+    if (message) params.set('message', message);
+    return request<{
+      assetId: string;
+      branch: string;
+      commit: string | null;
+      filesChanged: string[];
+      pushed: boolean;
+      pushOutput: string | null;
+      prSuggestion: string | null;
+    }>(`/api/assets/${assetId}/k8s/commit-workspace?${params}`, { method: 'POST' });
+  },
+  verifyAsset: (assetId: string, stage: 'docker' | 'k8s' = 'docker') =>
+    request<{
+      assetId: string;
+      stage: string;
+      passed: boolean;
+      failedAt: string | null;
+      steps: { name: string; ok: boolean; durationMs: number; detail: string }[];
+      summary: string;
+    }>(`/api/assets/${assetId}/verify?stage=${stage}`, { method: 'POST' }),
+
+  helpPrompt: (
+    assetId: string,
+    problem: string = 'general',
+    details?: string
+  ) => {
+    const params = new URLSearchParams({ problem });
+    if (details) params.set('details', details);
+    return request<{ assetId: string; problem: string; text: string }>(
+      `/api/assets/${assetId}/help-prompt?${params}`
+    );
+  },
   panels: (assetId: string) => request<Panel[]>(`/api/assets/${assetId}/panels`),
 
   updateAsset: (id: string, body: UpdateAssetBody) =>

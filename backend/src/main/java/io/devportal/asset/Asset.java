@@ -15,6 +15,7 @@ public record Asset(
     String repoDefaultBranch,
     List<String> tags,
     String lifecycle,
+    String k8sNamespace,    // nullable; null means "use asset id" or fall through to manifest/default
     Instant createdAt,
     Instant updatedAt
 ) {}

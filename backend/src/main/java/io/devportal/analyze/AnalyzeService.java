@@ -14,8 +14,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -101,20 +103,52 @@ public class AnalyzeService {
     public AutoWireResult autoWire(String assetId) throws IOException {
         AnalyzeReport report = analyze(assetId);
         int added = 0;
-        int already = 0;
         int unmatched = 0;
         List<String> wired = new ArrayList<>();
-        Set<String> dedupe = new HashSet<>();
 
+        // Build the SET of producers the current pom matches. Auto-wire is now idempotent:
+        // we ensure the asset's dep edges are exactly what its pom currently declares (for
+        // matched producers), so stale edges from older poms don't accumulate cycles.
+        Set<String> wantedProducers = new HashSet<>();
+        Set<String> seenCoords = new HashSet<>();
         for (AnalyzeReport.DependencyMatch m : report.dependencyMatches()) {
             if (m.matchedAssetId() == null) { unmatched++; continue; }
-            if (!dedupe.add(m.matchedAssetId())) continue;
-            if (m.alreadyWired()) { already++; continue; }
-            assets.insertDependency(assetId, m.matchedAssetId(),
+            if (!seenCoords.add(m.matchedAssetId())) continue;
+            wantedProducers.add(m.matchedAssetId());
+        }
+
+        // Existing build-kind edges for this consumer.
+        Map<String, Dependency> existing = new HashMap<>();
+        for (Dependency d : assets.findDependenciesOf(assetId)) {
+            if ("build".equals(d.kind())) existing.put(d.producerId(), d);
+        }
+
+        // Remove edges that the current pom no longer declares.
+        int removed = 0;
+        for (var e : existing.entrySet()) {
+            if (!wantedProducers.contains(e.getKey())) {
+                assets.deleteDependency(assetId, e.getKey(), "build");
+                removed++;
+            }
+        }
+
+        // Add edges that the pom declares but the DB doesn't have yet.
+        int already = 0;
+        for (AnalyzeReport.DependencyMatch m : report.dependencyMatches()) {
+            if (m.matchedAssetId() == null) continue;
+            String producer = m.matchedAssetId();
+            if (existing.containsKey(producer)) {
+                already++;
+                continue;
+            }
+            assets.insertDependency(assetId, producer,
                 m.coord().version() == null ? "main" : m.coord().version(), "build");
-            wired.add(m.matchedAssetId());
+            wired.add(producer);
             added++;
         }
+
+        log.info("Auto-wire for {}: +{} new, -{} stale, {} unchanged, {} unmatched",
+            assetId, added, removed, already, unmatched);
         return new AutoWireResult(assetId, added, already, unmatched, wired);
     }
 

@@ -31,15 +31,17 @@ public class PortAllocator {
     private final AssetRepository assets;
     private final WorkspaceService workspace;
     private final ManifestParser manifestParser;
+    private final PortSlotInferrer inferrer;
 
     public PortAllocator(PortProperties props, PortRepository repo,
                          AssetRepository assets, WorkspaceService workspace,
-                         ManifestParser manifestParser) {
+                         ManifestParser manifestParser, PortSlotInferrer inferrer) {
         this.props = props;
         this.repo = repo;
         this.assets = assets;
         this.workspace = workspace;
         this.manifestParser = manifestParser;
+        this.inferrer = inferrer;
     }
 
     public List<PortReservation> listAll() { return repo.findAll(); }
@@ -62,10 +64,28 @@ public class PortAllocator {
         if (!existing.isEmpty() && !reallocate) return existing;
         if (reallocate) repo.deleteByAssetAndScope(assetId, scope);
 
+        // Auto-clone if the workspace isn't there yet — saves a "run a build first" round-trip.
+        Path ws = workspace.workspaceFor(assetId);
+        if (!Files.isDirectory(ws.resolve(".git"))) {
+            io.devportal.asset.Asset asset = assets.findById(assetId).orElseThrow();
+            try {
+                workspace.syncCheckout(assetId, asset.repoUrl(), asset.repoDefaultBranch());
+            } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+                throw new ConflictException("Could not clone " + asset.repoUrl() + ": " + e.getMessage());
+            }
+        }
+
         List<Manifest.Port> slots = readSlotsFromManifest(assetId);
         if (slots.isEmpty()) {
+            // Manifest absent or has no ports declared — infer from real signals (Spring config, Dockerfile, k8s).
+            slots = inferrer.infer(ws);
+            log.info("Inferred {} port slot(s) for {} ({})", slots.size(), assetId,
+                slots.stream().map(Manifest.Port::name).toList());
+        }
+        if (slots.isEmpty()) {
             throw new ConflictException(
-                "Asset '" + assetId + "' has no port slots declared in devportal.yaml — nothing to allocate");
+                "No port slots could be inferred for '" + assetId + "' — declare them in devportal.yaml's "
+                + "spec.runtime.ports, or ensure the workspace has a Dockerfile / Spring config / k8s manifests.");
         }
 
         PortProperties.Range range = scopeRange(scope);
@@ -92,11 +112,7 @@ public class PortAllocator {
     private List<Manifest.Port> readSlotsFromManifest(String assetId) throws IOException {
         Path ws = workspace.workspaceFor(assetId);
         Path manifest = ws.resolve("devportal.yaml");
-        if (!Files.exists(manifest)) {
-            throw new ConflictException(
-                "No devportal.yaml found in workspace for '" + assetId
-                + "' — clone the repo first (run a build to populate the workspace)");
-        }
+        if (!Files.exists(manifest)) return List.of();
         ManifestParseResult parsed = manifestParser.parse(Files.readString(manifest));
         if (parsed.manifest() == null || parsed.manifest().spec() == null
             || parsed.manifest().spec().runtime() == null

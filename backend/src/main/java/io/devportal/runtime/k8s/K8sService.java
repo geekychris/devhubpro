@@ -37,26 +37,33 @@ public class K8sService {
     private final AssetRepository assets;
     private final WorkspaceService workspace;
     private final ManifestParser manifestParser;
+    private final io.devportal.port.PortRepository ports;
     private final ObjectMapper json = new ObjectMapper();
+    private final ObjectMapper yaml = new ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
 
     public K8sService(K8sProperties props, AssetRepository assets,
-                      WorkspaceService workspace, ManifestParser manifestParser) {
+                      WorkspaceService workspace, ManifestParser manifestParser,
+                      io.devportal.port.PortRepository ports) {
         this.props = props;
         this.assets = assets;
         this.workspace = workspace;
         this.manifestParser = manifestParser;
+        this.ports = ports;
     }
 
     public Map<String, Object> apply(String assetId) throws IOException, InterruptedException {
         Asset asset = loadAsset(assetId);
         Path manifestPath = resolveK8sPath(assetId);
+        Path renderedDir = renderForApply(asset, manifestPath);
         String ns = effectiveNamespace(assetId);
+        ensureNamespace(ns);                    // auto-create if missing
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("asset", asset.id());
         result.put("namespace", ns);
         result.put("manifestPath", manifestPath.toString());
+        result.put("renderedDir", renderedDir.toString());
         ProcResult res = exec(new String[]{
-            "kubectl", "apply", "-n", ns, "-f", manifestPath.toString()
+            "kubectl", "apply", "-n", ns, "-f", renderedDir.toString()
         });
         result.put("exitCode", res.exitCode);
         result.put("output", res.output);
@@ -67,9 +74,10 @@ public class K8sService {
     public Map<String, Object> delete(String assetId) throws IOException, InterruptedException {
         Asset asset = loadAsset(assetId);
         Path manifestPath = resolveK8sPath(assetId);
+        Path renderedDir = renderForApply(asset, manifestPath);
         String ns = effectiveNamespace(assetId);
         ProcResult res = exec(new String[]{
-            "kubectl", "delete", "-n", ns, "-f", manifestPath.toString(), "--ignore-not-found=true"
+            "kubectl", "delete", "-n", ns, "-f", renderedDir.toString(), "--ignore-not-found=true"
         });
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("asset", asset.id());
@@ -77,6 +85,93 @@ public class K8sService {
         result.put("exitCode", res.exitCode);
         result.put("output", res.output);
         return result;
+    }
+
+    /**
+     * Read all yaml manifests under {@code source}, patch Service ports[].nodePort to the
+     * asset's allocated k8s-nodeport reservations (matching by named slot), and write the
+     * rendered output to {@code ~/.devportal/runtime/<assetId>/k8s-rendered/}. Returns that dir.
+     *
+     * <p>Slot matching: a Service port whose name matches a registered slot name gets that slot's
+     * nodePort. If no name match but the asset has exactly one allocation, that's used.
+     */
+    public Path renderForApply(Asset asset, Path source) throws IOException {
+        Path target = Path.of(System.getProperty("user.home"), ".devportal", "runtime",
+            asset.id(), "k8s-rendered");
+        if (Files.isDirectory(target)) {
+            try (var stream = Files.walk(target)) {
+                stream.sorted((a, b) -> b.getNameCount() - a.getNameCount())
+                    .forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) {} });
+            }
+        }
+        Files.createDirectories(target);
+
+        var allocations = ports.findByAssetAndScope(asset.id(), "k8s-nodeport");
+        java.util.Map<String, Integer> bySlot = new java.util.HashMap<>();
+        for (var r : allocations) bySlot.put(r.slotName(), r.port());
+
+        if (Files.isRegularFile(source)) {
+            renderOneFile(source, target.resolve(source.getFileName()), bySlot);
+        } else {
+            try (var stream = Files.walk(source)) {
+                stream.filter(Files::isRegularFile)
+                    .filter(p -> {
+                        String n = p.getFileName().toString().toLowerCase();
+                        return n.endsWith(".yaml") || n.endsWith(".yml");
+                    })
+                    .forEach(p -> {
+                        Path rel = source.relativize(p);
+                        Path dst = target.resolve(rel);
+                        try {
+                            Files.createDirectories(dst.getParent());
+                            renderOneFile(p, dst, bySlot);
+                        } catch (IOException e) {
+                            log.warn("render skipped for {}: {}", p, e.getMessage());
+                        }
+                    });
+            }
+        }
+        log.info("Rendered k8s manifests for {} into {} (allocations={})", asset.id(), target, bySlot);
+        return target;
+    }
+
+    private void renderOneFile(Path src, Path dst, java.util.Map<String, Integer> bySlot) throws IOException {
+        // Multi-doc YAML: read all docs, patch Services, write back.
+        com.fasterxml.jackson.databind.node.ArrayNode out = json.createArrayNode();
+        try (var parser = yaml.getFactory().createParser(Files.newBufferedReader(src))) {
+            com.fasterxml.jackson.databind.MappingIterator<com.fasterxml.jackson.databind.JsonNode> it
+                = yaml.readerFor(com.fasterxml.jackson.databind.JsonNode.class).readValues(parser);
+            while (it.hasNext()) {
+                com.fasterxml.jackson.databind.JsonNode doc = it.next();
+                patchService(doc, bySlot);
+                out.add(doc);
+            }
+        }
+        // Write each doc separated by --- marker.
+        try (var writer = Files.newBufferedWriter(dst)) {
+            for (int i = 0; i < out.size(); i++) {
+                if (i > 0) writer.write("---\n");
+                writer.write(yaml.writeValueAsString(out.get(i)));
+            }
+        }
+    }
+
+    private void patchService(com.fasterxml.jackson.databind.JsonNode doc,
+                              java.util.Map<String, Integer> bySlot) {
+        if (doc == null || !doc.isObject()) return;
+        if (!"Service".equalsIgnoreCase(doc.path("kind").asText())) return;
+        com.fasterxml.jackson.databind.JsonNode portsArray = doc.path("spec").path("ports");
+        if (!portsArray.isArray()) return;
+        for (int i = 0; i < portsArray.size(); i++) {
+            com.fasterxml.jackson.databind.node.ObjectNode portNode =
+                (com.fasterxml.jackson.databind.node.ObjectNode) portsArray.get(i);
+            String name = portNode.path("name").asText(null);
+            Integer assigned = (name != null && bySlot.containsKey(name)) ? bySlot.get(name)
+                : (bySlot.size() == 1 && i == 0 ? bySlot.values().iterator().next() : null);
+            if (assigned != null) {
+                portNode.put("nodePort", assigned);
+            }
+        }
     }
 
     public K8sStatus status(String assetId) throws IOException, InterruptedException {
@@ -133,7 +228,8 @@ public class K8sService {
         return new MonitoringLinks(k9s, grafana, kubectlLogs);
     }
 
-    private Path resolveK8sPath(String assetId) throws IOException {
+    /** Public so the controller's render endpoint can use the same resolution rules. */
+    public Path resolveK8sPath(String assetId) throws IOException {
         Path ws = workspace.workspaceFor(assetId);
         if (!Files.isDirectory(ws.resolve(".git"))) {
             throw new ConflictException("Workspace empty for '" + assetId + "' — run a build first");
@@ -158,7 +254,19 @@ public class K8sService {
         return resolved;
     }
 
-    private String effectiveNamespace(String assetId) {
+    /**
+     * Resolution order:
+     * <ol>
+     *   <li>{@code asset.k8sNamespace} from the DB (UI-editable per asset)</li>
+     *   <li>{@code spec.kubernetes.namespace} from the asset's devportal.yaml</li>
+     *   <li>global default {@code devportal.k8s.namespace} (defaults to {@code default})</li>
+     * </ol>
+     */
+    public String effectiveNamespace(String assetId) {
+        var asset = assets.findById(assetId).orElse(null);
+        if (asset != null && asset.k8sNamespace() != null && !asset.k8sNamespace().isBlank()) {
+            return asset.k8sNamespace();
+        }
         Path manifest = workspace.workspaceFor(assetId).resolve("devportal.yaml");
         if (Files.exists(manifest)) {
             try {
@@ -171,6 +279,19 @@ public class K8sService {
             } catch (IOException ignored) {}
         }
         return props.namespace() == null || props.namespace().isBlank() ? "default" : props.namespace();
+    }
+
+    /** Best-effort: ensure the namespace exists. {@code kubectl create ns} returns 0 or AlreadyExists. */
+    private void ensureNamespace(String namespace) throws IOException, InterruptedException {
+        if (namespace == null || namespace.isBlank() || "default".equals(namespace)) return;
+        ProcResult check = exec(new String[]{"kubectl", "get", "namespace", namespace, "--no-headers", "--ignore-not-found"});
+        if (check.exitCode == 0 && check.output != null && !check.output.trim().isEmpty()) return;
+        ProcResult create = exec(new String[]{"kubectl", "create", "namespace", namespace});
+        if (create.exitCode != 0 && !create.output.contains("AlreadyExists")) {
+            log.warn("Could not auto-create namespace {}: {}", namespace, create.output);
+        } else {
+            log.info("Created namespace {}", namespace);
+        }
     }
 
     private Asset loadAsset(String id) {

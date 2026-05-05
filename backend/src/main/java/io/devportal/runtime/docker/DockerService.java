@@ -58,13 +58,12 @@ public class DockerService {
     /** Kick off `docker build` as a regular Build row; returns immediately. */
     public BuildView buildImage(String assetId) throws IOException {
         Asset asset = loadAsset(assetId);
-        Path ws = workspace.workspaceFor(assetId);
-        if (!Files.isDirectory(ws.resolve(".git"))) {
-            throw new ConflictException("Workspace for '" + assetId + "' is empty — run a build to clone the repo first");
-        }
-        DockerSpec spec = readSpec(ws);
+        Path ws = ensureCheckout(asset);
+        DockerSpec spec = effectiveDockerSpec(ws);
         if (!spec.enabled) {
-            throw new ConflictException("Asset '" + assetId + "' has docker.enabled=false in its manifest");
+            throw new ConflictException(
+                "No Dockerfile found in '" + assetId + "' workspace and no docker config in devportal.yaml — "
+                + "nothing to build. Add a Dockerfile, or pass docker.enabled=true with a valid dockerfile path.");
         }
         String image = spec.image == null || spec.image.isBlank() ? "devportal/" + assetId + ":latest" : spec.image;
         String dockerfile = spec.dockerfile == null ? "Dockerfile" : spec.dockerfile;
@@ -87,29 +86,36 @@ public class DockerService {
      */
     public RunContainerResult runContainer(String assetId) throws IOException, InterruptedException {
         Asset asset = loadAsset(assetId);
-        Path ws = workspace.workspaceFor(assetId);
-        DockerSpec spec = readSpec(ws);
+        Path ws;
+        try { ws = ensureCheckout(asset); }
+        catch (IOException e) { throw e; }
+        DockerSpec spec = effectiveDockerSpec(ws);
         if (!spec.enabled) {
-            throw new ConflictException("docker.enabled=false in manifest for '" + assetId + "'");
+            throw new ConflictException(
+                "No Dockerfile found in '" + assetId + "' workspace — cannot run a container.");
         }
         String image = spec.image == null || spec.image.isBlank() ? "devportal/" + assetId + ":latest" : spec.image;
 
         List<PortReservation> allocated = ports.allocate(assetId, "local", false);
         List<Manifest.Port> slots = readSlots(ws);
 
-        // Build -p flags: host_port -> container_port. We assume container port == host port for simplicity
-        // when the manifest declares slots without container-port info; user can override via docker run.
         List<String> args = new ArrayList<>(List.of("docker", "run", "-d",
             "--name", "devportal-" + assetId,
             "--label", LABEL + "=" + assetId));
 
+        // Map host_port -> container_port. Container port comes from the conventional default for
+        // the named slot (Spring Boot http=8080, management=8081, etc.) — matches what the k8s
+        // scaffolder generates.
         List<RunContainerResult.PortMapping> mappings = new ArrayList<>();
         for (PortReservation r : allocated) {
-            int containerPort = r.port(); // simple convention; manifest can override later
+            int containerPort = conventionalContainerPort(r.slotName());
             args.add("-p");
             args.add(r.port() + ":" + containerPort + (r.protocol().equals("udp") ? "/udp" : ""));
             mappings.add(new RunContainerResult.PortMapping(r.slotName(), r.port(), containerPort, r.protocol()));
         }
+        // Help Spring Boot bind to the right container port even if its config defaults change.
+        args.add("-e");
+        args.add("SERVER_PORT=" + conventionalContainerPort("http"));
         args.add(image);
 
         ProcResult res = exec(args.toArray(String[]::new), ws);
@@ -119,6 +125,22 @@ public class DockerService {
         String containerId = res.stdout.trim();
         log.info("Started container {} for asset {} ({}), ports={}", containerId, assetId, image, mappings);
         return new RunContainerResult(containerId, "devportal-" + assetId, image, mappings, res.combined);
+    }
+
+    /** Conventional container port for a named slot — keep aligned with K8sScaffolder's mapping. */
+    private static int conventionalContainerPort(String slotName) {
+        return switch (slotName) {
+            case "http" -> 8080;
+            case "management", "metrics" -> 8081;
+            case "debug" -> 5005;
+            case "grpc" -> 9090;
+            default -> 8080;
+        };
+    }
+
+    /** Read-only peek used by the verify flow without going through the REST layer. */
+    public io.devportal.build.dto.BuildView peekBuild(long buildId) {
+        return builds.findById(buildId).map(io.devportal.build.dto.BuildView::of).orElse(null);
     }
 
     public List<DockerContainerView> listContainers(String assetId) throws IOException, InterruptedException {
@@ -166,6 +188,35 @@ public class DockerService {
             d.enabled() != null && d.enabled(),
             d.dockerfile(), d.context(), d.image()
         );
+    }
+
+    /**
+     * If the manifest doesn't enable docker (or there's no manifest), but a Dockerfile exists in
+     * the workspace, treat docker as enabled with conventional defaults.
+     */
+    private DockerSpec effectiveDockerSpec(Path ws) throws IOException {
+        DockerSpec fromManifest = readSpec(ws);
+        if (fromManifest.enabled) return fromManifest;
+        // Fallback: detect Dockerfile.
+        if (Files.exists(ws.resolve("Dockerfile"))) {
+            return new DockerSpec(true, "Dockerfile", ".", null);
+        }
+        for (String alt : List.of("docker/Dockerfile", "build/Dockerfile")) {
+            if (Files.exists(ws.resolve(alt))) {
+                return new DockerSpec(true, alt, ".", null);
+            }
+        }
+        return fromManifest;
+    }
+
+    private Path ensureCheckout(Asset asset) throws IOException {
+        Path ws = workspace.workspaceFor(asset.id());
+        if (Files.isDirectory(ws.resolve(".git"))) return ws;
+        try {
+            return workspace.syncCheckout(asset.id(), asset.repoUrl(), asset.repoDefaultBranch());
+        } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+            throw new IOException("Could not clone " + asset.repoUrl() + ": " + e.getMessage(), e);
+        }
     }
 
     private List<Manifest.Port> readSlots(Path ws) throws IOException {

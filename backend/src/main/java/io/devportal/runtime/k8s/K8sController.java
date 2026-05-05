@@ -14,12 +14,26 @@ import org.springframework.web.bind.annotation.RestController;
 public class K8sController {
 
     private final K8sService k8s;
+    private final io.devportal.asset.AssetRepository assets;
 
-    public K8sController(K8sService k8s) { this.k8s = k8s; }
+    public K8sController(K8sService k8s, io.devportal.asset.AssetRepository assets) {
+        this.k8s = k8s;
+        this.assets = assets;
+    }
 
     @PostMapping("/api/assets/{id}/k8s/apply")
     public Map<String, Object> apply(@PathVariable String id) throws IOException, InterruptedException {
         return k8s.apply(id);
+    }
+
+    /** Render manifests with allocated NodePorts patched in; returns the dir path (no apply). */
+    @PostMapping("/api/assets/{id}/k8s/render")
+    public Map<String, Object> render(@PathVariable String id) throws IOException {
+        var asset = assets.findById(id).orElseThrow(
+            () -> new io.devportal.asset.error.NotFoundException("Asset '" + id + "' not found"));
+        var src = k8s.resolveK8sPath(id);
+        var rendered = k8s.renderForApply(asset, src);
+        return Map.of("asset", id, "renderedDir", rendered.toString(), "source", src.toString());
     }
 
     @DeleteMapping("/api/assets/{id}/k8s")

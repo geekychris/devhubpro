@@ -14,6 +14,7 @@ export function EditAssetForm({ asset, onClose }: { asset: Asset; onClose: () =>
     repoDefaultBranch: asset.repoDefaultBranch,
     tags: asset.tags,
     lifecycle: asset.lifecycle,
+    k8sNamespace: asset.k8sNamespace ?? '',
   });
   const [tagsText, setTagsText] = useState(asset.tags.join(', '));
 
@@ -91,6 +92,14 @@ export function EditAssetForm({ asset, onClose }: { asset: Asset; onClose: () =>
             value={form.repoDefaultBranch ?? ''}
             onChange={(e) => setForm({ ...form, repoDefaultBranch: e.target.value })}
             className="w-full rounded border border-gray-300 px-3 py-1.5"
+          />
+        </Field>
+        <Field label="Kubernetes namespace">
+          <input
+            value={form.k8sNamespace ?? ''}
+            onChange={(e) => setForm({ ...form, k8sNamespace: e.target.value })}
+            placeholder={asset.id}
+            className="w-full rounded border border-gray-300 px-3 py-1.5 font-mono text-xs"
           />
         </Field>
         <Field label="Repo URL" wide>

@@ -151,6 +151,7 @@ public class SearchService {
             rs.getString("repo_default_branch"),
             tags,
             rs.getString("lifecycle"),
+            rs.getString("k8s_namespace"),
             c == null ? null : c.toInstant(),
             u == null ? null : u.toInstant()
         );

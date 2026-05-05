@@ -5,6 +5,7 @@ import { RegisterPage } from './pages/RegisterPage';
 import { MetaAssetsPage } from './pages/MetaAssetsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { BulkImportPage } from './pages/BulkImportPage';
+import { PortsPage } from './pages/PortsPage';
 import { SearchBar } from './components/SearchBar';
 
 export function App() {
@@ -36,6 +37,14 @@ export function App() {
               }
             >
               Meta-assets
+            </NavLink>
+            <NavLink
+              to="/ports"
+              className={({ isActive }) =>
+                isActive ? 'text-blue-700 font-medium' : 'text-gray-600 hover:text-gray-900'
+              }
+            >
+              Ports
             </NavLink>
             <NavLink
               to="/register"
@@ -70,6 +79,7 @@ export function App() {
           <Route path="/assets" element={<AssetsPage />} />
           <Route path="/assets/:id" element={<AssetDetailPage />} />
           <Route path="/meta-assets" element={<MetaAssetsPage />} />
+          <Route path="/ports" element={<PortsPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/bulk-import" element={<BulkImportPage />} />
           <Route path="/settings" element={<SettingsPage />} />

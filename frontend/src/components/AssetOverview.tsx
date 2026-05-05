@@ -24,6 +24,7 @@ export function AssetOverview({ asset }: { asset: Asset }) {
           }
         />
         <Row label="Default branch" value={asset.repoDefaultBranch} />
+        <Row label="K8s namespace" value={asset.k8sNamespace ?? <span className="text-gray-400">{asset.id} (default)</span>} mono />
         <Row label="Description" value={asset.description ?? gitInfo.data?.description ?? '—'} wide />
         <Row label="Tags" value={asset.tags.length ? asset.tags.join(', ') : '—'} wide />
         <Row label="Created" value={new Date(asset.createdAt).toLocaleString()} />
@@ -84,11 +85,21 @@ export function AssetOverview({ asset }: { asset: Asset }) {
   );
 }
 
-function Row({ label, value, wide }: { label: string; value: React.ReactNode; wide?: boolean }) {
+function Row({
+  label,
+  value,
+  wide,
+  mono,
+}: {
+  label: string;
+  value: React.ReactNode;
+  wide?: boolean;
+  mono?: boolean;
+}) {
   return (
     <div className={wide ? 'sm:col-span-2' : ''}>
       <dt className="text-xs font-medium uppercase tracking-wide text-gray-500">{label}</dt>
-      <dd className="mt-0.5 text-gray-900">{value}</dd>
+      <dd className={`mt-0.5 text-gray-900 ${mono ? 'font-mono text-xs' : ''}`}>{value}</dd>
     </div>
   );
 }

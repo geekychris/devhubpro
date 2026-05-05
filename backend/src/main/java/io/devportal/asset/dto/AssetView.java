@@ -15,12 +15,13 @@ public record AssetView(
     String repoDefaultBranch,
     List<String> tags,
     String lifecycle,
+    String k8sNamespace,
     Instant createdAt,
     Instant updatedAt
 ) {
     public static AssetView of(Asset a) {
         return new AssetView(a.id(), a.name(), a.description(), a.owner(), a.type(),
             a.language(), a.repoUrl(), a.repoDefaultBranch(), a.tags(), a.lifecycle(),
-            a.createdAt(), a.updatedAt());
+            a.k8sNamespace(), a.createdAt(), a.updatedAt());
     }
 }
