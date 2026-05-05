@@ -33,7 +33,35 @@ public record Manifest(
         Runtime runtime,
         List<DependencyRef> dependencies,
         List<ConsumesRef> consumes,
-        Docs docs
+        Docs docs,
+        Test test
+    ) {}
+
+    /** Test/QA fixtures. Reserved for future expansion (smoke probes, load fixtures, etc). */
+    public record Test(
+        List<TestFixture> fixtures
+    ) {}
+
+    /**
+     * One named test-data fixture. The {@code command} is run in the workspace cwd; if it prints
+     * a {@code DEVPORTAL_FIXTURE: {json}} line, the JSON is parsed for structured credentials/
+     * links/summary that the UI surfaces in a credentials table.
+     */
+    public record TestFixture(
+        String name,
+        String description,
+        String command,
+        // "host" (default) — run on the dev_portal host with workspace cwd.
+        // "docker:<image>" — docker run inside the asset's image (future).
+        // "pod:<deployment>" — kubectl exec into a running pod (future).
+        String runIn,
+        // When true the fixture is treated as a setup/lifecycle hook: after a successful
+        // `kubectl apply` (when the caller passes ?runHooks=true), all runOnApply fixtures
+        // are executed in declaration order, results merged into the apply response.
+        Boolean runOnApply,
+        // Wait this many seconds for pods to become Ready before running the hook. Default
+        // 0 (no wait). Useful for setup hooks that need the cluster to be live.
+        Integer waitForPodsSeconds
     ) {}
 
     public record Build(

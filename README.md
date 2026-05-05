@@ -34,6 +34,7 @@ Postgres is the database of record. Workspaces, secrets, logs, and rendered mani
   - [Search](#search)
   - [State sync](#state-sync)
   - [Bulk import](#bulk-import)
+  - [Lifecycle hooks (test fixtures + setup hooks)](#lifecycle-hooks-test-fixtures--setup-hooks)
 - [MCP server](#mcp-server)
 - [Claude Code skills](#claude-code-skills)
 - [Data model](#data-model)
@@ -450,6 +451,45 @@ Asset search is a single SQL `ILIKE` across id, name, description, owner, langua
 ### Bulk import
 
 `BulkImportService` lists an org's repos via the GitHub API, applies include/exclude regex patterns and language filters, registers each repo as an asset, optionally clones + analyzes + auto-wires. Job state is in-memory keyed by id; the frontend polls `GET /api/bulk-imports/{id}` for live updates. Filter semantics: `(language match) OR (include match)` minus exclude, archived (default skip), forks (default skip). If no language and no include patterns are set, everything passes through.
+
+### Lifecycle hooks (test fixtures + setup hooks)
+
+A general mechanism for declaring named, structured commands an asset exposes — for test-data generation, post-deploy seeding, credential dumps, smoke probes. Declared in `spec.test.fixtures` in `devportal.yaml`. Surfaced in the **Fixtures** tab. Setup-style fixtures with `runOnApply: true` auto-fire after a successful `kubectl apply` when the apply call passes `runHooks=true`.
+
+Output contract: the command emits one line of the form `DEVPORTAL_FIXTURE: {json}`. The JSON carries `summary`, `credentials[]`, and `links[]`. The portal renders a credentials table with click-to-copy passwords and clickable link buttons.
+
+```yaml
+spec:
+  test:
+    fixtures:
+      - name: seed-tenants
+        description: Provision demo tenants with admin users
+        command: bash scripts/devportal-fixture-emit.sh http://localhost:30080
+        runOnApply: true            # auto-fire after kubectl apply
+        waitForPodsSeconds: 60      # wait for pods Ready before running
+```
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant UI as Fixtures tab / Apply
+    participant API as Backend
+    participant K as kubectl
+    participant Cmd as Fixture command
+    User->>UI: Apply with runHooks=true
+    UI->>API: POST /api/assets/{id}/k8s/apply?runHooks=true
+    API->>K: kubectl apply -f rendered/
+    K-->>API: applied
+    loop each runOnApply fixture in declaration order
+        API->>Cmd: bash <command> in workspace cwd
+        Cmd-->>API: stdout w/ DEVPORTAL_FIXTURE: {json}
+        API->>API: parse JSON; record build row
+    end
+    API-->>UI: { apply: {...}, hookResults: [...] }
+    UI->>User: credentials table + summary + links
+```
+
+Full pattern + worked ESP example (seeding 3 tenants + verifying live login) in **[docs/lifecycle-hooks.md](docs/lifecycle-hooks.md)**.
 
 ---
 

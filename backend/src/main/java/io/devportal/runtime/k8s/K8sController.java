@@ -22,26 +22,42 @@ public class K8sController {
     private final K8sCompositionService composition;
     private final K8sDiagnosticsService diagnostics;
     private final io.devportal.asset.AssetRepository assets;
+    private final io.devportal.test.TestFixtureService fixtures;
 
     public K8sController(K8sService k8s, K8sCompositionService composition,
                          K8sDiagnosticsService diagnostics,
-                         io.devportal.asset.AssetRepository assets) {
+                         io.devportal.asset.AssetRepository assets,
+                         io.devportal.test.TestFixtureService fixtures) {
         this.k8s = k8s;
         this.composition = composition;
         this.diagnostics = diagnostics;
         this.assets = assets;
+        this.fixtures = fixtures;
     }
 
     @PostMapping("/api/assets/{id}/k8s/apply")
     public Object apply(
         @PathVariable String id,
         @RequestParam(name = "include", required = false) String include,
-        @RequestParam(name = "skip", required = false) String skip
+        @RequestParam(name = "skip", required = false) String skip,
+        // When true, after a successful apply run all spec.test.fixtures with runOnApply=true
+        // in declaration order. Used to seed test data, populate caches, etc. Hook results
+        // are merged into the response under the "hookResults" key.
+        @RequestParam(name = "runHooks", required = false, defaultValue = "false") boolean runHooks
     ) throws IOException, InterruptedException {
+        Object applyResult;
         if ("runtime".equalsIgnoreCase(include)) {
-            return composition.applyComposite(id, parseCsv(skip));
+            applyResult = composition.applyComposite(id, parseCsv(skip));
+        } else {
+            applyResult = k8s.apply(id);
         }
-        return k8s.apply(id);
+        if (!runHooks) return applyResult;
+        java.util.List<io.devportal.test.FixtureResult> hookResults = fixtures.runOnApplyHooks(id);
+        // Wrap apply result + hooks in a single envelope so the caller sees both.
+        return java.util.Map.of(
+            "apply", applyResult,
+            "hookResults", hookResults
+        );
     }
 
     @GetMapping("/api/assets/{id}/k8s/runtime-plan")

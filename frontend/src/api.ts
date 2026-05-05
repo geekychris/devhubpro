@@ -198,6 +198,34 @@ export type FrontendScaffoldResult = {
   message: string;
 };
 
+export type TestFixture = {
+  name: string;
+  description: string | null;
+  command: string;
+  runIn: string | null;
+};
+
+export type FixtureResult = {
+  name: string;
+  buildId: number;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  exitCode: number | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  summary: string | null;
+  credentials: {
+    label: string | null;
+    username: string | null;
+    password: string | null;
+    role: string | null;
+    url: string | null;
+  }[];
+  links: { label: string | null; url: string | null }[];
+  logTail: string[];
+  parseError: string | null;
+};
+
 export type RuntimePlan = {
   rootId: string;
   steps: {
@@ -558,6 +586,14 @@ export const api = {
       `/api/assets/${assetId}/scaffold-frontend?path=${encodeURIComponent(path)}`,
       { method: 'POST' }
     ),
+
+  // ---- test fixtures ----
+  listTestFixtures: (assetId: string) =>
+    request<TestFixture[]>(`/api/assets/${assetId}/test-fixtures`),
+  runTestFixture: (assetId: string, name: string) =>
+    request<FixtureResult>(`/api/assets/${assetId}/test-fixtures/${name}/run`, { method: 'POST' }),
+  lastFixtureRun: (assetId: string, name: string) =>
+    request<FixtureResult | null>(`/api/assets/${assetId}/test-fixtures/${name}/last-run`),
 
   k8sRuntimePlan: (assetId: string) =>
     request<RuntimePlan>(`/api/assets/${assetId}/k8s/runtime-plan`),

@@ -163,6 +163,54 @@
             "runbook": { "type": "string" }
           },
           "additionalProperties": false
+        },
+        "test": {
+          "type": "object",
+          "description": "QA / test data fixtures the asset exposes via the dev_portal Fixtures tab.",
+          "properties": {
+            "fixtures": {
+              "type": "array",
+              "description": "Named test-data scripts (seed users, generate posts, etc). Each fixture's command runs in the workspace cwd; print a DEVPORTAL_FIXTURE: {json} line to surface credentials/links/summary in the UI.",
+              "items": {
+                "type": "object",
+                "required": ["name", "command"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]*$",
+                    "description": "URL-safe identifier."
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Short human-readable summary shown in the Fixtures tab."
+                  },
+                  "command": {
+                    "type": "string",
+                    "description": "Shell command. Prefix with cd <subdir> && if needed."
+                  },
+                  "runIn": {
+                    "type": "string",
+                    "default": "host",
+                    "description": "host | docker:<image> | pod:<deployment>",
+                    "examples": ["host", "docker:worksphere/datagen:latest", "pod:social-app"]
+                  },
+                  "runOnApply": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Treat this fixture as a setup/lifecycle hook — auto-run after a successful kubectl apply when the apply call passes runHooks=true."
+                  },
+                  "waitForPodsSeconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Wait this many seconds for app=<asset-id> pods to become Ready before running. Useful for setup hooks that need the cluster live."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
