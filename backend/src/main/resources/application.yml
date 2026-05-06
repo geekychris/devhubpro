@@ -36,6 +36,10 @@ devportal:
     dir: ${DEVPORTAL_WORKSPACE_DIR:${user.home}/.devportal/workspace}
   state:
     repo: ${DEVPORTAL_STATE_REPO:${user.home}/.devportal/state}
+  backup:
+    dir: ${DEVPORTAL_BACKUP_DIR:${user.home}/.devportal/backups}
+    auto-commit: true                                 # if backup dir is inside a git working tree, commit each new backup
+    keep-last: 30                                     # retention; older folders pruned from the working tree (git history untouched)
   ports:
     local:
       start: 18000
@@ -46,6 +50,25 @@ devportal:
   k8s:
     monitoring-base-url: ""    # e.g. https://grafana.internal/d/asset-overview?var-asset=
     namespace: default
+
+  telegram:
+    enabled: false                                    # opt-in; set true after creating a bot via @BotFather
+    bot-token-file: ${user.home}/.devportal/secrets/telegram-bot-token
+    allowlist-file: ${user.home}/.devportal/secrets/telegram-allowlist
+    allow-groups: false                               # only respond in private chats by default
+    long-message-mode: split                          # split | truncate | file
+
+  cli:
+    enabled: true
+    ssh:
+      host: 127.0.0.1                                  # set to 0.0.0.0 to expose on the LAN
+      port: 2222
+      host-key: ${user.home}/.devportal/secrets/ssh-host-key
+      authorized-keys: ${user.home}/.devportal/secrets/authorized_keys
+      password-file: ${user.home}/.devportal/secrets/ssh-password
+      allow-publickey: true
+      allow-password: true
+      generate-password-if-missing: true               # writes a one-time password file mode 0600 if no auth source is configured
 
 springdoc:
   swagger-ui:

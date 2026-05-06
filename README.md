@@ -34,9 +34,12 @@ Postgres is the database of record. Workspaces, secrets, logs, and rendered mani
   - [Dependency graph UI](#dependency-graph-ui)
   - [Search](#search)
   - [State sync](#state-sync)
+  - [Backup and restore](#backup-and-restore)
   - [Bulk import](#bulk-import)
   - [Lifecycle hooks (test fixtures + setup hooks)](#lifecycle-hooks-test-fixtures--setup-hooks)
 - [MCP server](#mcp-server)
+- [CLI / SSH access](#cli--ssh-access)
+- [Telegram bot](#telegram-bot)
 - [Claude Code skills](#claude-code-skills)
 - [Data model](#data-model)
 - [URLs](#urls)
@@ -50,7 +53,9 @@ Postgres is the database of record. Workspaces, secrets, logs, and rendered mani
 graph LR
     User([User])
     Claude([Claude Code])
+    Phone([Phone / Telegram])
     GH[(GitHub)]
+    TG((Telegram<br/>Bot API))
     DK[Docker daemon]
     K8s[Kubernetes cluster]
 
@@ -59,7 +64,7 @@ graph LR
     end
 
     subgraph Backend
-        BE[Spring Boot 3<br/>Java 21<br/>:8081]
+        BE[Spring Boot 3<br/>Java 21<br/>:8081 HTTP<br/>:2222 SSH]
     end
 
     subgraph MCPHost[MCP host]
@@ -67,11 +72,14 @@ graph LR
     end
 
     PG[(Postgres 16<br/>Flyway)]
-    FS[(~/.devportal/<br/>workspace, logs,<br/>secrets, state)]
+    FS[(~/.devportal/<br/>workspace, logs,<br/>secrets, state, backups)]
 
     User --> UI
-    UI -->|/api proxy| BE
+    User -->|ssh| BE
     Claude -->|stdio| MCP
+    Phone --> TG
+    BE -.long-poll.-> TG
+    UI -->|/api proxy| BE
     MCP -->|HTTP| BE
     BE --> PG
     BE --> FS
@@ -515,6 +523,35 @@ Asset search is a single SQL `ILIKE` across id, name, description, owner, langua
 
 `StateService` exports each asset to `<state-repo>/assets/<id>.yaml` with its dependency edges, plus `index.yaml` and a generated `README.md`. Import is destructive: the existing assets are deleted before re-inserting from the YAML tree, in two passes (assets first, edges second). Postgres is the source of truth — the YAML repo is a backup, not the system of record.
 
+### Backup and restore
+
+Higher-level snapshot/restore on top of state-sync. Each `backup create` writes a timestamped folder containing the state YAML tree plus an opt-in copy of secrets and build logs, with a `manifest.json` describing the bundle. The backup root can be any directory; if it's inside a git working tree, each new backup is auto-committed (and optionally pushed).
+
+Helper scripts live in [`scripts/`](scripts/) — bash wrappers around the SSH CLI that handle BatchMode for cron, confirmation gates for restore, and the one-time setup walkthrough:
+
+```sh
+./scripts/devportal-backup-setup.sh --clone git@github.com:me/devportal-state.git
+./scripts/devportal-backup.sh --commit --push --message "ad-hoc"
+./scripts/devportal-restore.sh                 # interactive picker
+```
+
+Drop a single line in cron / systemd / launchd for nightly snapshots:
+
+```cron
+30 2 * * * /home/me/code/dev_portal/scripts/devportal-backup.sh --commit --push --quiet --message "nightly $(date -I)"
+```
+
+Or inside an interactive `devportal>` SSH session:
+
+```
+backup create                                  # state-only, default ~/.devportal/backups/
+backup create --secrets --commit --push        # full snapshot, committed + pushed
+backup list                                    # newest first
+backup restore /path/to/20260506-091820        # destructive: wipes + reloads
+```
+
+Pattern: a dedicated private `devportal-state` git repo, or a sub-directory of the dev_portal source repo, with the backup root pointed at it. Retention via `devportal.backup.keep-last`. REST + CLI parity. Full reference (configuration, scripts, cron / systemd / launchd, disaster recovery walkthrough, security model): **[docs/backup.md](docs/backup.md)** and **[scripts/README.md](scripts/README.md)**.
+
 ### Bulk import
 
 `BulkImportService` lists an org's repos via the GitHub API, applies include/exclude regex patterns and language filters, registers each repo as an asset, optionally clones + analyzes + auto-wires. Job state is in-memory keyed by id; the frontend polls `GET /api/bulk-imports/{id}` for live updates. Filter semantics: `(language match) OR (include match)` minus exclude, archived (default skip), forks (default skip). If no language and no include patterns are set, everything passes through.
@@ -584,6 +621,133 @@ The server has no port and no state — every tool call is an HTTP request. Rest
 
 ---
 
+## CLI / SSH access
+
+The backend exposes an embedded SSH server on `127.0.0.1:2222` (override `devportal.cli.ssh.host` to bind on the LAN). Logging in lands you in an interactive `devportal>` shell with tab-completion, history, ANSI colors, and full parity with the REST API — every controller has a corresponding command group, plus a `macro` namespace for composite operations.
+
+Full reference: **[docs/cli.md](docs/cli.md)** — auth setup, every command group with options, output formats, color scheme, extension recipe, OS-side ops, security notes, troubleshooting.
+
+### Logging in
+
+```sh
+# password (auto-generated on first start at ~/.devportal/secrets/ssh-password, mode 0600):
+ssh devportal@127.0.0.1 -p 2222
+
+# public key — drop your public key into ~/.devportal/secrets/authorized_keys:
+echo "$(cat ~/.ssh/id_ed25519.pub)" >> ~/.devportal/secrets/authorized_keys
+ssh -i ~/.ssh/id_ed25519 devportal@127.0.0.1 -p 2222
+```
+
+The username is ignored — single-user local mode. Configure auth in `application.yml`:
+
+```yaml
+devportal:
+  cli:
+    enabled: true
+    ssh:
+      host: 127.0.0.1                # 0.0.0.0 to expose on the LAN
+      port: 2222
+      allow-publickey: true
+      allow-password: true
+      authorized-keys: ${user.home}/.devportal/secrets/authorized_keys
+      password-file: ${user.home}/.devportal/secrets/ssh-password
+```
+
+### Command surface
+
+| Group         | Examples                                                                                |
+|---------------|-----------------------------------------------------------------------------------------|
+| `asset`       | `asset list -q redis`, `asset get foo`, `asset register geekychris/foo`, `asset add-dep` |
+| `build`       | `build kick foo --mode deep`, `build log 123`, `build progress 123`                     |
+| `port`        | `port list`, `port allocate foo --scope k8s-nodeport`, `port release foo`               |
+| `k8s`         | `k8s apply foo --include runtime --run-hooks`, `k8s status foo`, `k8s diagnostics foo`  |
+| `pod`         | `pod list foo`, `pod logs foo my-pod-abc`, `pod events foo`                              |
+| `docker`      | `docker build foo`, `docker run foo`, `docker ps foo`, `docker stop foo my-container`   |
+| `forward`     | `forward start foo my-pod 8080`, `forward list`, `forward stop 42`                       |
+| `endpoint`    | `endpoint list foo`                                                                     |
+| `fixture`     | `fixture list foo`, `fixture run foo seed-tenants`, `fixture last-run foo seed-tenants` |
+| `dashboard`   | `dashboard running`                                                                     |
+| `search`      | `search run "redis ratelimit"`                                                          |
+| `analyze`     | `analyze run foo`, `analyze auto-wire foo`, `analyze artifacts foo`                     |
+| `audit`       | `audit run foo`                                                                         |
+| `import`      | `import preview my-org`, `import start my-org --lang Java`, `import list`               |
+| `meta`        | `meta list`, `meta attach my-svc redis-shared --role cache`                              |
+| `state`       | `state export`, `state git-sync --message "snapshot"`                                   |
+| `settings`    | `settings github-show`, `settings github-set <pat>`, `settings github-test`             |
+| `workspace`   | `workspace status foo`, `workspace commit foo --branch fix --message "..."`             |
+| `scaffold`    | `scaffold k8s foo`, `scaffold runtime foo`, `scaffold commit-render foo --push`         |
+| `discover`, `docs`, `git-info`, `panel`, `prompt`, `tag`, `verify`, `health`, `graph` | … |
+| `macro`       | `macro spinup foo`, `macro teardown foo`, `macro audit-all`, `macro sh foo -- ls -la`   |
+
+Built-ins: `help` (lists commands), `help <command>` (detail), `exit` / `quit` / `Ctrl-D` to disconnect.
+
+### Output formats
+
+Most list commands accept `--json` for machine-readable output; single-object views default to YAML for human reading. Text-returning commands (logs, diffs, doc bodies) print raw text.
+
+```sh
+asset list --json | jq '.[] | select(.lifecycle == "stable") | .id'
+```
+
+### Adding new commands
+
+The CLI is designed to extend without touching framework code. The shortest path:
+
+1. Write a new `@Component` class annotated with `@Command(name = "mything", ...)` under `backend/src/main/java/io/devportal/cli/commands/`.
+2. Add `@Command`-annotated methods for each subcommand, with `@Parameters` / `@Option` parameters and a service injected via constructor.
+3. Append the class name to `RootCommand`'s `subcommands = { ... }` array.
+
+Spring autowires services, picocli routes input, JLine picks up tab completion automatically.
+
+For composite operations (allocate ports + apply k8s + run hooks + report endpoints) and OS-side operations (shell out, file scan), drop a method into `MacroCommands` — `macro sh <asset> <cmd...>` shows the pattern, and a `shell(command, cwd, timeoutSeconds)` helper handles process management. Worked examples + the full extension recipe are in [docs/cli.md](docs/cli.md#extending-the-cli).
+
+---
+
+## Telegram bot
+
+Same command surface as the SSH CLI, accessed by chat. Each Telegram message is parsed into picocli argv, dispatched against the same `RootCommand` tree, output captured / ANSI-stripped / wrapped in a code block / split if >4096 chars, and sent back to the chat. No public URL needed — the bot long-polls Telegram's API.
+
+```
+You:  asset list -q redis
+Bot:  ID         TYPE    LANG  LIFECYCLE     ★  ♥  PIN  NAME
+      redis-monitoring  service  java  experimental  -  ·  📌  redis_monitoring
+
+You:  backup create --message "from the train"
+Bot:  created /Users/me/.devportal/backups/20260506-143012
+      stamp    20260506-143012
+      assets   130
+      …
+```
+
+### Setup
+
+```sh
+# 1. Create a bot via @BotFather, copy the token.
+# 2. Run the guided setup — token, getMe verify, chat-id discovery, allowlist:
+./scripts/devportal-telegram-setup.sh
+
+# 3. Flip the switch in application.yml:
+devportal:
+  telegram:
+    enabled: true
+
+# 4. Restart the backend.
+```
+
+Allowlist is enforced — empty allowlist = no chat is authorized; first unauthorized message gets a one-time reveal of the sender's chat id so setup is self-explanatory. Manage the allowlist from the SSH CLI:
+
+```
+telegram status
+telegram allow <chat-id>
+telegram deny <chat-id>
+```
+
+`/start` and `/help` are recognized; otherwise any plain text is routed to the picocli command tree (`/asset list` and `asset list` both work). Group chats are off by default; enable with `devportal.telegram.allow-groups: true`. Long replies are split on line boundaries by default (`long-message-mode: split | truncate | file`).
+
+Security model is the same as the SSH CLI — full backend privileges. Anyone on the allowlist can run `macro sh`, `backup restore`, etc. Be conservative about who you authorize. Full reference (architecture, config, security, troubleshooting): **[docs/telegram.md](docs/telegram.md)**.
+
+---
+
 ## Claude Code skills
 
 Skills under `skills/` give Claude a checklist when the user asks for a specific workflow. They prefer MCP tools but read the workspace directly when faster.
@@ -594,6 +758,8 @@ Skills under `skills/` give Claude a checklist when the user asks for a specific
 | `devportal-audit`      | "audit X", "what's wrong with X", "drift on X"           | Group findings by severity then area, propose concrete fixes, never auto-fix without confirmation.                                     |
 | `devportal-docs`       | "doc this", "scaffold docs in X", "normalize docs"       | Render `schema/doc-skeleton/*.tmpl` into the asset repo with placeholder substitution; preserve files that already have real content. |
 | `devportal-k8s-convert`| "convert X to k8s", "standardize k8s for X"              | Render or scaffold k8s manifests on a `devportal/...` branch, verify boot via `/verify?stage=docker`, never push to main, one asset per invocation. |
+| `init-repo`            | "init this repo as X", "set up git for this project"     | Detect languages, write a comprehensive `.gitignore`, ensure README has Design / Architecture / Build / Run sections, run `git init / add / commit`. Optionally chains into `containerize-service`. |
+| `containerize-service` | "containerize X", "add docker to X", "make this deployable" | Multi-stage Dockerfile + k8s Deployment / Service / optional Ingress, then proves it works via `docker build` + `docker run` + HTTP probe + `kubectl apply --dry-run=server`. Called by `init-repo` after first commit. |
 
 ---
 

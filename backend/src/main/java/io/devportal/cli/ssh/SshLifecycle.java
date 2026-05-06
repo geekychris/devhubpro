@@ -9,9 +9,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.attribute.PosixFilePermission;
 import java.security.SecureRandom;
+import java.security.Security;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import java.util.EnumSet;
 import java.util.HexFormat;
-import org.apache.sshd.common.config.keys.AuthorizedKeyEntry;
+import org.apache.sshd.common.config.keys.PublicKeyEntry;
 import org.apache.sshd.common.config.keys.PublicKeyEntryResolver;
 import org.apache.sshd.server.SshServer;
 import org.apache.sshd.server.auth.password.PasswordAuthenticator;
@@ -45,6 +47,12 @@ public class SshLifecycle implements SmartLifecycle {
         this.props = props;
         this.root = root;
         this.factory = factory;
+        // Mina routes Ed25519 public-key parsing through whichever provider supplies the
+        // EdDSA algorithm; the JDK's bundled provider doesn't expose the names Mina expects,
+        // so register BouncyCastle if it isn't already registered.
+        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
+            Security.addProvider(new BouncyCastleProvider());
+        }
     }
 
     @Override
@@ -67,6 +75,8 @@ public class SshLifecycle implements SmartLifecycle {
                 server.setPasswordAuthenticator(loadPasswordAuth(expand(cfg.getPasswordFile()), cfg.isGeneratePasswordIfMissing()));
             }
             server.setShellFactory(new DevportalShellFactory(root, factory));
+            // CommandFactory drives one-shot exec channels — `ssh user@host 'asset list'`.
+            server.setCommandFactory((channel, command) -> new DevportalExecCommand(root, factory, command));
 
             server.start();
             running = true;
@@ -102,8 +112,24 @@ public class SshLifecycle implements SmartLifecycle {
         return (username, key, session) -> {
             if (authorizedKeysPath == null || !Files.isReadable(authorizedKeysPath)) return false;
             try {
-                for (AuthorizedKeyEntry e : AuthorizedKeyEntry.readAuthorizedKeys(authorizedKeysPath)) {
-                    var resolved = e.resolvePublicKey(session, PublicKeyEntryResolver.IGNORING);
+                // We strip OpenSSH-style comments ourselves (Mina's parseAuthorizedKeyEntry
+                // mis-tokenizes lines that have an email-style comment) and call
+                // PublicKeyEntry.parsePublicKeyEntry on just the `keytype base64` portion.
+                for (String line : Files.readAllLines(authorizedKeysPath)) {
+                    String trimmed = line.trim();
+                    if (trimmed.isEmpty() || trimmed.startsWith("#")) continue;
+                    String[] parts = trimmed.split("\\s+", 3);
+                    if (parts.length < 2) continue;
+                    String keyOnly = parts[0] + " " + parts[1];
+                    java.security.PublicKey resolved;
+                    try {
+                        PublicKeyEntry pke = PublicKeyEntry.parsePublicKeyEntry(keyOnly);
+                        resolved = pke.resolvePublicKey(session, java.util.Map.of(),
+                            PublicKeyEntryResolver.IGNORING);
+                    } catch (Exception resolveEx) {
+                        log.warn("authorized_keys: skipping key (parse/resolve failed: {})", resolveEx.getMessage());
+                        continue;
+                    }
                     if (resolved != null && resolved.equals(key)) return true;
                 }
             } catch (Exception ex) {

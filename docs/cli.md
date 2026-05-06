@@ -30,6 +30,7 @@ This document is the deep reference. The README has a short summary; this is the
   - [Analyze + audit + verify](#analyze--audit--verify)
   - [Bulk import](#bulk-import)
   - [Meta-assets + consumes](#meta-assets--consumes)
+  - [Backup and restore](#backup-and-restore)
   - [State + workspace](#state--workspace)
   - [Settings](#settings)
   - [Scaffold + commit](#scaffold--commit)
@@ -379,6 +380,30 @@ meta attach ASSET META [--role R]
 meta detach ASSET META [--role R]
 ```
 
+### Backup and restore
+
+Point-in-time snapshots that bundle state YAML + opt-in secrets + opt-in logs into a timestamped folder, optionally committing into a git repo. Full reference + recovery scenarios in [docs/backup.md](backup.md).
+
+```
+backup create [--dir D] [--secrets] [--logs] [--commit] [--push] [--message M]
+backup list [--dir D] [--json]                         # newest first
+backup restore PATH [--secrets] [--logs]               # destructive — wipes existing state first
+```
+
+Common patterns:
+
+```sh
+# state-only nightly into a private state repo, pushed to origin:
+backup create --dir ~/code/devportal-state --commit --push --message "nightly $(date -I)"
+
+# full snapshot before risky migration:
+backup create --secrets --logs --message "pre-migration"
+
+# disaster recovery:
+backup list
+backup restore /Users/me/.devportal/backups/20260506-091820 --secrets
+```
+
 ### State + workspace
 
 ```
@@ -701,5 +726,7 @@ Completion is built from picocli's static command tree at session start. If you'
 ## See also
 
 - [README — CLI / SSH access](../README.md#cli--ssh-access) — short summary + login.
+- [docs/telegram.md](telegram.md) — the same command tree exposed by Telegram bot. Useful when phone-driven admin is the goal.
+- [docs/backup.md](backup.md) — full reference for the `backup` command group + helper scripts.
 - [README — Lifecycle hooks](../README.md#lifecycle-hooks-test-fixtures--setup-hooks) and [docs/lifecycle-hooks.md](lifecycle-hooks.md) — the test-fixture model that `fixture run` / `--run-hooks` invoke.
 - [README — MCP server](../README.md#mcp-server) — the same operations exposed to Claude Code over stdio.

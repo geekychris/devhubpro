@@ -35,8 +35,11 @@ public class StateGitService {
         try (Repository repo = new FileRepositoryBuilder().setGitDir(dir.resolve(".git").toFile()).build();
              Git git = new Git(repo)) {
             git.add().addFilepattern(".").call();
-            var status = git.status().call();
-            if (status.isClean()) {
+            // status() walks HEAD's tree; on an unborn HEAD (just `git init`, no commits yet)
+            // that throws MissingObjectException. Skip the cleanliness check when HEAD is unborn —
+            // we want the first commit to land regardless.
+            boolean hasHead = repo.resolve("HEAD") != null;
+            if (hasHead && git.status().call().isClean()) {
                 log.info("No changes to commit in {}", dir);
                 return null;
             }

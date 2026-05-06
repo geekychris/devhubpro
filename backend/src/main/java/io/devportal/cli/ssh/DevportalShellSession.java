@@ -145,7 +145,7 @@ public class DevportalShellSession implements Command {
      * Bourne-ish argv split — supports double quotes, single quotes, and backslash escapes.
      * Adequate for the CLI; not a full shell parser (no env-var expansion, no pipes).
      */
-    static String[] parseArgv(String line) {
+    public static String[] parseArgv(String line) {
         java.util.List<String> out = new java.util.ArrayList<>();
         StringBuilder cur = new StringBuilder();
         boolean inSingle = false, inDouble = false, has = false;

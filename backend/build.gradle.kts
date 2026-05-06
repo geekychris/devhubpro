@@ -37,6 +37,23 @@ dependencies {
 
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.7.0")
 
+    // CLI / SSH server: picocli for command parsing, JLine for the readline loop,
+    // Apache Mina SSHD as the SSH transport. See io.devportal.cli.
+    implementation("info.picocli:picocli:4.7.6")
+    implementation("info.picocli:picocli-shell-jline3:4.7.6")
+    implementation("org.apache.sshd:sshd-core:2.13.2")
+    implementation("org.jline:jline:3.27.1")
+    // Mina SSHD's Ed25519 support routes through one of two impls — net.i2p's eddsa
+    // library or BouncyCastle. We pull both: net.i2p satisfies Mina's "EdDSA provider"
+    // check at the SSH layer, BouncyCastle covers KeyEntry resolution and other ECC.
+    implementation("net.i2p.crypto:eddsa:0.3.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+
+    // Telegram bot — long-polling client for the bot API. Bridges into the same picocli
+    // command tree the SSH CLI uses (see io.devportal.telegram).
+    implementation("com.github.pengrad:java-telegram-bot-api:7.11.0")
+
     developmentOnly("org.springframework.boot:spring-boot-devtools")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")

@@ -24,6 +24,7 @@ import picocli.CommandLine.HelpCommand;
         AssetCommands.class,
         AnalyzeCommands.class,
         AuditCommands.class,
+        BackupCommands.class,
         BuildCommands.class,
         BulkImportCommands.class,
         DashboardCommands.class,
@@ -48,6 +49,7 @@ import picocli.CommandLine.HelpCommand;
         SettingsCommands.class,
         StateCommands.class,
         TagCommands.class,
+        TelegramCommands.class,
         VerifyCommands.class,
         WorkspaceCommands.class,
     }
