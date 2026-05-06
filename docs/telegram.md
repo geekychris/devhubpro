@@ -71,6 +71,18 @@ Single shared bot instance, ThreadLocal-bound output stream per message, so two 
 
 ## Setup
 
+You have two paths — the **Settings UI** (point-and-click, lives at <http://localhost:5173/settings> under the "Telegram bot" panel) or the **shell script** (`scripts/devportal-telegram-setup.sh`, guided walkthrough). Both end up with the same files on disk; pick whichever matches the moment.
+
+### Option A — Settings UI
+
+1. **Master switch**: set `devportal.telegram.enabled: true` in `application.yml` and restart the backend. The UI can manage the token and allowlist *while the bot is disabled*, so you can prep everything before flipping the switch.
+2. Open <http://localhost:5173/settings> and find the **Telegram bot** panel.
+3. **Token** — paste the @BotFather token in the input, click Save. The portal writes it mode-0600 to `~/.devportal/secrets/telegram-bot-token`. Click **Test connection** — calls Telegram's `getMe` and reports the bot's username (`ok — bot is @yourbotname`) or the rejection reason.
+4. **Allowlist** — type your numeric chat id and click Add. Don't know your chat id? Once the token is saved and the bot is running (master switch on), open the bot in Telegram and send any message. The bot replies with `Not authorized. Your chat id: 12345678`. Copy that number into the UI.
+5. The UI also has **Restart bot** (no-op if disabled) and **Clear token** (also stops the bot). The bot picks up token changes immediately — no JVM restart needed.
+
+### Option B — Shell script
+
 ### 1. Create a bot via @BotFather
 
 In Telegram:
@@ -100,7 +112,7 @@ Re-run the script any time — every step is idempotent. To pre-supply the token
 ./devportal-telegram-setup.sh --token "1234:AAH..."
 ```
 
-### 3. Enable and restart
+### 3. Enable and restart (option B continued)
 
 ```yaml
 devportal:
@@ -194,6 +206,10 @@ If `long-message-mode: file` is set, replies bigger than 4096 chars are sent as 
 
 Three places to manage the allowlist:
 
+### From the Settings UI
+
+<http://localhost:5173/settings> → **Telegram bot** panel → "Authorized chat ids". Paste a numeric id, click Add. Each entry has a Remove button. Same backing file as the CLI commands — both surfaces edit `~/.devportal/secrets/telegram-allowlist` directly, and the bot re-reads on every message.
+
 ### From inside the SSH CLI (recommended)
 
 ```
@@ -216,6 +232,23 @@ echo 12345678 >> ~/.devportal/secrets/telegram-allowlist
 ```
 
 One id per line. Comments (lines starting with `#`) are allowed.
+
+### REST API
+
+The Settings UI talks to these endpoints; you can hit them directly too.
+
+| Verb     | Path                                        | Body                       | Purpose                                            |
+|----------|---------------------------------------------|----------------------------|----------------------------------------------------|
+| `GET`    | `/api/settings/telegram`                    | —                          | Token status + bot status + allowlist size + paths |
+| `PUT`    | `/api/settings/telegram/token`              | `{"token":"..."}`          | Save the token, restart the bot if enabled        |
+| `DELETE` | `/api/settings/telegram/token`              | —                          | Clear the token, stop the bot                     |
+| `POST`   | `/api/settings/telegram/test`               | —                          | Call `getMe`; returns `{ok, username, message}`   |
+| `GET`    | `/api/settings/telegram/allowlist`          | —                          | `{ "chatIds": [ ... ] }`                          |
+| `POST`   | `/api/settings/telegram/allowlist`          | `{"chatId":12345678}`      | Add a chat id (also when negative for groups)     |
+| `DELETE` | `/api/settings/telegram/allowlist/{chatId}` | —                          | Remove a chat id                                  |
+| `POST`   | `/api/settings/telegram/restart`            | —                          | Bounce the bot — useful after editing files manually |
+
+The full bot token is never returned; the status response shows just a redacted preview (`1234567890:AAH…XYZ`).
 
 ---
 

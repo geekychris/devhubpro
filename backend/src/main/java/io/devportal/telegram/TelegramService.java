@@ -8,6 +8,7 @@ import com.pengrad.telegrambot.model.Update;
 import com.pengrad.telegrambot.model.request.ParseMode;
 import com.pengrad.telegrambot.request.SendMessage;
 import io.devportal.cli.commands.RootCommand;
+import io.devportal.cli.output.Out;
 import io.devportal.cli.output.SessionStream;
 import io.devportal.cli.ssh.DevportalShellSession;
 import java.io.ByteArrayOutputStream;
@@ -63,20 +64,31 @@ public class TelegramService implements SmartLifecycle {
         this.factory = factory;
     }
 
+    /**
+     * Boot-time auto-start gate. {@code devportal.telegram.enabled} controls whether Spring
+     * calls {@link #start()} automatically when the context comes up. The UI's Restart button
+     * bypasses this — it calls {@link #start()} directly, which only requires a token.
+     */
+    @Override
+    public boolean isAutoStartup() {
+        return props.isEnabled();
+    }
+
     @Override
     public synchronized void start() {
         if (running) return;
-        if (!props.isEnabled()) return;
 
         String token = readToken();
         if (token == null) {
-            log.warn("Telegram bot enabled but no token at {} — disabled. Run scripts/devportal-telegram-setup.sh.",
-                props.getBotTokenFile());
+            log.info("Telegram start requested but no token at {} — set one via the Settings UI"
+                + " or scripts/devportal-telegram-setup.sh.", props.getBotTokenFile());
             return;
         }
 
         bot = new TelegramBot(token);
         bot.setUpdatesListener(updates -> {
+            // Visibility for "did anything arrive at all?" — flip to DEBUG once it's working.
+            log.info("Telegram: received {} update(s)", updates.size());
             for (Update u : updates) {
                 try { handleUpdate(u); }
                 catch (Exception e) { log.warn("Telegram update handler failed: {}", e.getMessage(), e); }
@@ -118,7 +130,9 @@ public class TelegramService implements SmartLifecycle {
         Chat chat = msg.chat();
         if (chat == null || msg.text() == null) return;
 
-        boolean isPrivate = "private".equals(chat.type().name());
+        // Pengrad's Chat.Type enum uses "Private" (capital P) for DMs and lowercase for the
+        // group variants — compare case-insensitively to avoid silently dropping every DM.
+        boolean isPrivate = chat.type() != null && "private".equalsIgnoreCase(chat.type().name());
         if (!isPrivate && !props.isAllowGroups()) {
             // Silently ignore group messages unless explicitly enabled.
             return;
@@ -168,6 +182,8 @@ public class TelegramService implements SmartLifecycle {
         ByteArrayOutputStream buf = new ByteArrayOutputStream(2048);
         PrintStream sessionOut = new PrintStream(buf, true, StandardCharsets.UTF_8);
         SessionStream.bind(sessionOut);
+        // Vertical key/value rendering for tables — Telegram clients wrap wide lines.
+        Out.bindLayout(Out.Layout.COMPACT);
         try {
             CommandLine cli = new CommandLine(root, factory);
             cli.setOut(new PrintWriter(sessionOut, true));
@@ -183,6 +199,7 @@ public class TelegramService implements SmartLifecycle {
         } catch (Exception e) {
             return "error: " + e.getMessage();
         } finally {
+            Out.clearLayout();
             SessionStream.clear();
         }
     }
@@ -330,6 +347,109 @@ public class TelegramService implements SmartLifecycle {
         }
         if (removed) Files.writeString(p, String.join("\n", kept) + (kept.isEmpty() ? "" : "\n"));
         return removed;
+    }
+
+    // ---------- token management (used by the Settings UI / REST controller) ----------
+
+    public record TokenInfo(boolean hasToken, String preview, String source, int length, boolean wellFormed) {}
+
+    /** Inspect the configured token without revealing it. */
+    public TokenInfo tokenInfo() {
+        String t = readToken();
+        if (t == null) return new TokenInfo(false, null, "NONE", 0, false);
+        // pengrad bot tokens look like "1234567890:AAH-abcdef0123..." — preview keeps the bot id
+        // (the digits before the colon) and a hint of the secret half.
+        int colon = t.indexOf(':');
+        String preview = (colon > 0 && t.length() > 12)
+            ? t.substring(0, colon + 4) + "…" + t.substring(t.length() - 3)
+            : "(set)";
+        // Detect obvious malformedness so we can warn before a getMe call: a real token has the
+        // shape "<digits>:<35-50 base64-ish chars>" and contains no whitespace.
+        boolean wellFormed = colon > 0
+            && t.substring(0, colon).chars().allMatch(Character::isDigit)
+            && t.length() - colon - 1 > 30
+            && t.chars().noneMatch(Character::isWhitespace);
+        return new TokenInfo(true, preview, "FILE", t.length(), wellFormed);
+    }
+
+    /** Persist a new token (mode 0600) and bounce the bot so the change takes effect. */
+    public void setToken(String token) throws java.io.IOException {
+        if (token == null || token.isBlank()) throw new IllegalArgumentException("token is required");
+        Path p = expand(props.getBotTokenFile());
+        if (p == null) throw new java.io.IOException("bot-token-file not configured");
+        Files.createDirectories(p.getParent());
+        Files.writeString(p, token.strip(), StandardCharsets.UTF_8);
+        try { Files.setPosixFilePermissions(p,
+            java.util.EnumSet.of(java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                                 java.nio.file.attribute.PosixFilePermission.OWNER_WRITE)); }
+        catch (UnsupportedOperationException ignore) {}
+        restart();
+    }
+
+    /** Remove the stored token and stop the bot. The application.yml enabled flag is unchanged. */
+    public void clearToken() throws java.io.IOException {
+        Path p = expand(props.getBotTokenFile());
+        if (p != null) Files.deleteIfExists(p);
+        stop();
+    }
+
+    public record TestResult(boolean ok, String username, String message) {}
+
+    /**
+     * Verify the configured token by calling Telegram's getMe over HTTPS — same check
+     * the setup script does. Doesn't change any state.
+     */
+    public TestResult testConnection() {
+        String t = readToken();
+        if (t == null) return new TestResult(false, null, "no token configured");
+        try {
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofSeconds(5))
+                .build();
+            java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create("https://api.telegram.org/bot" + t + "/getMe"))
+                .timeout(java.time.Duration.ofSeconds(10))
+                .GET().build();
+            java.net.http.HttpResponse<String> r = client.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+            String desc = parseField(r.body(), "description");
+            if (r.statusCode() == 401) {
+                return new TestResult(false, null,
+                    "401 Unauthorized" + (desc == null ? "" : " — " + desc)
+                        + ". Token (length " + t.length() + ") was rejected. Common causes:"
+                        + " typo (compare to @BotFather, char-by-char), token revoked, bot deleted,"
+                        + " or whitespace/newline pasted with the token. Check the preview in the UI"
+                        + " matches the first/last chars of your @BotFather token.");
+            }
+            if (r.statusCode() == 404) {
+                return new TestResult(false, null,
+                    "404 Not Found — Telegram doesn't recognize this bot id. The token's <id>: prefix"
+                        + " probably points at a deleted bot. Re-create via @BotFather and try again.");
+            }
+            if (r.statusCode() / 100 != 2) {
+                return new TestResult(false, null,
+                    "Telegram returned " + r.statusCode()
+                        + (desc == null ? ": " + r.body() : " — " + desc));
+            }
+            // Cheap regex extract — we only want the username for the success message.
+            String u = parseField(r.body(), "username");
+            return new TestResult(true, u, u == null ? "ok" : "ok — bot is @" + u);
+        } catch (Exception e) {
+            return new TestResult(false, null, e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+    }
+
+    /** Pull a top-level string field from a Telegram-style JSON response. Tolerant of small variations. */
+    private static String parseField(String body, String key) {
+        if (body == null) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+            "\"" + java.util.regex.Pattern.quote(key) + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").matcher(body);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /** Restart the bot — picks up a new token without a JVM bounce. */
+    public synchronized void restart() {
+        if (running) stop();
+        start();
     }
 
     public List<Long> currentAllowlist() {

@@ -415,6 +415,27 @@ export type GitHubTokenTestResult = {
   message: string;
 };
 
+export type TelegramSettings = {
+  enabled: boolean;
+  running: boolean;
+  hasToken: boolean;
+  preview: string | null;
+  source: 'FILE' | 'NONE';
+  tokenLength: number;
+  tokenWellFormed: boolean;
+  allowlistCount: number;
+  allowGroups: boolean;
+  tokenFile: string;
+  allowlistFile: string;
+  longMessageMode: 'split' | 'truncate' | 'file';
+};
+
+export type TelegramTestResult = {
+  ok: boolean;
+  username: string | null;
+  message: string;
+};
+
 export type Panel = {
   id: string;
   title: string;
@@ -729,6 +750,32 @@ export const api = {
     request<GitHubTokenInfo>('/api/settings/github', { method: 'DELETE' }),
   testGitHubToken: () =>
     request<GitHubTokenTestResult>('/api/settings/github/test', { method: 'POST' }),
+
+  // ---- settings: telegram ----
+  getTelegramSettings: () => request<TelegramSettings>('/api/settings/telegram'),
+  setTelegramToken: (token: string) =>
+    request<TelegramSettings>('/api/settings/telegram/token', {
+      method: 'PUT',
+      body: JSON.stringify({ token }),
+    }),
+  clearTelegramToken: () =>
+    request<TelegramSettings>('/api/settings/telegram/token', { method: 'DELETE' }),
+  testTelegram: () =>
+    request<TelegramTestResult>('/api/settings/telegram/test', { method: 'POST' }),
+  getTelegramAllowlist: () =>
+    request<{ chatIds: number[] }>('/api/settings/telegram/allowlist'),
+  addTelegramAllowlist: (chatId: number) =>
+    request<{ chatId: number; added: boolean; chatIds: number[] }>(
+      '/api/settings/telegram/allowlist',
+      { method: 'POST', body: JSON.stringify({ chatId }) },
+    ),
+  removeTelegramAllowlist: (chatId: number) =>
+    request<{ chatId: number; removed: boolean; chatIds: number[] }>(
+      `/api/settings/telegram/allowlist/${chatId}`,
+      { method: 'DELETE' },
+    ),
+  restartTelegram: () =>
+    request<TelegramSettings>('/api/settings/telegram/restart', { method: 'POST' }),
 
   audit: (assetId: string) => request<AuditReport>(`/api/assets/${assetId}/audit`),
 

@@ -18,6 +18,20 @@ public final class Out {
 
     public enum Format { TABLE, JSON, YAML }
 
+    /**
+     * Layout hint for {@link #table} / {@link #tableOf}: {@code TABLE} is the default
+     * wide-table form; {@code COMPACT} renders as a vertical list (one record per block,
+     * one field per line). Telegram binds COMPACT before each command since chat clients
+     * wrap any line wider than ~40 chars; SSH leaves the default alone for full tables.
+     */
+    public enum Layout { TABLE, COMPACT }
+
+    private static final ThreadLocal<Layout> LAYOUT = ThreadLocal.withInitial(() -> Layout.TABLE);
+
+    public static void bindLayout(Layout l) { LAYOUT.set(l); }
+    public static void clearLayout() { LAYOUT.remove(); }
+    public static Layout currentLayout() { return LAYOUT.get(); }
+
     /** Shared, pretty-printing JSON mapper — also reused by commands that need to deserialize JSON request bodies. */
     public static final ObjectMapper JSON_MAPPER = new ObjectMapper()
         .registerModule(new JavaTimeModule())
@@ -91,7 +105,32 @@ public final class Out {
             }
             rows.add(row);
         }
+        if (currentLayout() == Layout.COMPACT) return compact(header, rows);
         return table(header, rows);
+    }
+
+    /**
+     * Vertical, chat-friendly rendering: one block per record, one field per line.
+     * Headers become the labels; the first column doubles as the record's lead line so
+     * a quick scan still picks out ids. Designed for &lt; 40-char-wide displays (phones).
+     */
+    public static String compact(List<String> header, List<List<String>> rows) {
+        if (rows.isEmpty()) return "";
+        int labelWidth = header.stream().mapToInt(String::length).max().orElse(0);
+        StringBuilder sb = new StringBuilder();
+        for (int r = 0; r < rows.size(); r++) {
+            List<String> row = rows.get(r);
+            String lead = !row.isEmpty() && row.get(0) != null ? row.get(0) : "(record " + (r + 1) + ")";
+            sb.append(lead).append('\n');
+            for (int i = 1; i < header.size(); i++) {
+                String value = i < row.size() && row.get(i) != null ? row.get(i) : "";
+                if (value.isEmpty() || "·".equals(value) || "-".equals(value)) continue;  // skip empties
+                sb.append("  ").append(pad(header.get(i).toLowerCase(), labelWidth)).append("  ")
+                    .append(value).append('\n');
+            }
+            if (r < rows.size() - 1) sb.append('\n');  // blank line between records
+        }
+        return sb.toString();
     }
 
     public static String pad(String s, int w) {

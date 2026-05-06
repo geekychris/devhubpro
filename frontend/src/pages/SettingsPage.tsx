@@ -7,6 +7,7 @@ export function SettingsPage() {
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold text-gray-900">Settings</h1>
       <GitHubSection />
+      <TelegramSection />
     </div>
   );
 }
@@ -151,6 +152,266 @@ function GitHubSection() {
           github.com/settings/tokens
         </a>{' '}
         — Classic, scope <code>repo</code>.
+      </p>
+    </section>
+  );
+}
+
+function TelegramSection() {
+  const queryClient = useQueryClient();
+  const settings = useQuery({
+    queryKey: ['telegram-settings'],
+    queryFn: () => api.getTelegramSettings(),
+  });
+  const allowlist = useQuery({
+    queryKey: ['telegram-allowlist'],
+    queryFn: () => api.getTelegramAllowlist(),
+    enabled: settings.data?.hasToken === true,
+  });
+
+  const [token, setToken] = useState('');
+  const [reveal, setReveal] = useState(false);
+  const [chatId, setChatId] = useState('');
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['telegram-settings'] });
+    queryClient.invalidateQueries({ queryKey: ['telegram-allowlist'] });
+  };
+
+  const saveToken = useMutation({
+    mutationFn: () => api.setTelegramToken(token.trim()),
+    onSuccess: () => { setToken(''); invalidate(); },
+  });
+  const clearToken = useMutation({
+    mutationFn: () => api.clearTelegramToken(),
+    onSuccess: invalidate,
+  });
+  const testConn = useMutation({ mutationFn: () => api.testTelegram() });
+  const addId = useMutation({
+    mutationFn: () => api.addTelegramAllowlist(Number(chatId.trim())),
+    onSuccess: () => { setChatId(''); invalidate(); },
+  });
+  const removeId = useMutation({
+    mutationFn: (id: number) => api.removeTelegramAllowlist(id),
+    onSuccess: invalidate,
+  });
+  const restart = useMutation({
+    mutationFn: () => api.restartTelegram(),
+    onSuccess: invalidate,
+  });
+
+  const s = settings.data;
+
+  return (
+    <section className="rounded border border-gray-200 bg-white p-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-gray-900">Telegram bot</h2>
+        {s?.running ? (
+          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
+            running
+          </span>
+        ) : s?.hasToken ? (
+          <span className="rounded bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-900">
+            stopped — click Start
+          </span>
+        ) : (
+          <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+            no token
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-gray-500">
+        Bridge to the same CLI command tree the SSH server exposes — accessed by chat. Token stored
+        at <code>{s?.tokenFile ?? '~/.devportal/secrets/telegram-bot-token'}</code> (mode 0600).
+        Allowlist at <code>{s?.allowlistFile ?? '~/.devportal/secrets/telegram-allowlist'}</code>.
+      </p>
+
+      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+        <div className="text-xs font-medium text-gray-500">Auto-start at boot</div>
+        <div className="font-mono text-xs">
+          {s?.enabled ? 'on' : 'off'}{' '}
+          <span className="text-gray-500">
+            (devportal.telegram.enabled in application.yml — set true to auto-start the bot
+            whenever the backend boots)
+          </span>
+        </div>
+        <div className="text-xs font-medium text-gray-500">Token</div>
+        <div className="font-mono text-xs">
+          {s?.hasToken ? (
+            <>
+              {s.preview ?? '(set)'}
+              <span className="ml-2 text-gray-500">
+                (length {s.tokenLength}
+                {s.tokenWellFormed ? '' : <span className="text-red-600"> — malformed!</span>})
+              </span>
+            </>
+          ) : (
+            <span className="text-gray-400">not set</span>
+          )}
+        </div>
+        <div className="text-xs font-medium text-gray-500">Allowlist</div>
+        <div className="font-mono text-xs">
+          {s?.allowlistCount ?? 0} chat id{(s?.allowlistCount ?? 0) === 1 ? '' : 's'}
+          {s?.allowGroups ? ' (groups allowed)' : ' (DM only)'}
+        </div>
+        <div className="text-xs font-medium text-gray-500">Long-message mode</div>
+        <div className="font-mono text-xs">{s?.longMessageMode ?? 'split'}</div>
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (token.trim()) saveToken.mutate();
+        }}
+        className="mt-4 space-y-2"
+      >
+        <label className="block text-xs font-medium text-gray-700">
+          Bot token (from <code>@BotFather</code>)
+        </label>
+        <div className="flex gap-2">
+          <input
+            type={reveal ? 'text' : 'password'}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="1234567890:AAH-…"
+            className="flex-1 rounded border border-gray-300 px-3 py-1.5 font-mono text-xs"
+            autoComplete="off"
+          />
+          <button
+            type="button"
+            onClick={() => setReveal((v) => !v)}
+            className="rounded border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100"
+          >
+            {reveal ? 'Hide' : 'Reveal'}
+          </button>
+          <button
+            type="submit"
+            disabled={!token.trim() || saveToken.isPending}
+            className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saveToken.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+        {saveToken.error && (
+          <p className="text-xs text-red-600">{(saveToken.error as Error).message}</p>
+        )}
+      </form>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => testConn.mutate()}
+          disabled={!s?.hasToken || testConn.isPending}
+          className="rounded border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+        >
+          {testConn.isPending ? 'Testing…' : 'Test connection'}
+        </button>
+        <button
+          onClick={() => restart.mutate()}
+          disabled={!s?.hasToken || restart.isPending}
+          className="rounded border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+        >
+          {s?.running
+            ? restart.isPending ? 'Restarting…' : 'Restart bot'
+            : restart.isPending ? 'Starting…' : 'Start bot'}
+        </button>
+        <button
+          onClick={() => {
+            if (confirm('Clear the stored Telegram token? This stops the bot.')) clearToken.mutate();
+          }}
+          disabled={!s?.hasToken || clearToken.isPending}
+          className="rounded border border-red-300 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+        >
+          Clear token
+        </button>
+      </div>
+
+      {testConn.data && (
+        <p className={`mt-2 text-xs ${testConn.data.ok ? 'text-green-700' : 'text-red-600'}`}>
+          {testConn.data.message}
+        </p>
+      )}
+
+      {/* allowlist editor */}
+      <div className="mt-5">
+        <h3 className="text-xs font-medium text-gray-700">Authorized chat ids</h3>
+        <p className="mt-1 text-xs text-gray-500">
+          Only these chats can run commands. Empty list = bot rejects every message (and reveals the
+          sender's chat id once so they can be added). Group chat ids are negative — Telegram uses
+          <code> -100…</code> for supergroups.
+        </p>
+
+        <div className="mt-2 space-y-1">
+          {(allowlist.data?.chatIds ?? []).map((id) => (
+            <div
+              key={id}
+              className="flex items-center justify-between rounded border border-gray-200 px-3 py-1.5 text-sm"
+            >
+              <span className="font-mono text-xs">{id}</span>
+              <button
+                onClick={() => removeId.mutate(id)}
+                disabled={removeId.isPending}
+                className="rounded border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          {allowlist.data && allowlist.data.chatIds.length === 0 && (
+            <p className="text-xs italic text-gray-500">(empty — no chat is authorized)</p>
+          )}
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (chatId.trim() && !Number.isNaN(Number(chatId))) addId.mutate();
+          }}
+          className="mt-2 flex gap-2"
+        >
+          <input
+            type="text"
+            value={chatId}
+            onChange={(e) => setChatId(e.target.value)}
+            placeholder="chat id (numeric)"
+            className="flex-1 rounded border border-gray-300 px-3 py-1.5 font-mono text-xs"
+            autoComplete="off"
+          />
+          <button
+            type="submit"
+            disabled={!chatId.trim() || Number.isNaN(Number(chatId)) || addId.isPending}
+            className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {addId.isPending ? 'Adding…' : 'Add'}
+          </button>
+        </form>
+        {addId.error && (
+          <p className="mt-1 text-xs text-red-600">{(addId.error as Error).message}</p>
+        )}
+      </div>
+
+      <p className="mt-4 text-xs text-gray-500">
+        Don't know your chat id?  Open the bot in Telegram and send any message — the bot replies
+        once with your chat id, which you can paste above. Or run{' '}
+        <code>scripts/devportal-telegram-setup.sh</code> for a guided walkthrough.
+        Reference:{' '}
+        <a
+          href="https://t.me/BotFather"
+          target="_blank"
+          rel="noreferrer"
+          className="text-blue-700 hover:underline"
+        >
+          @BotFather
+        </a>
+        {' · '}
+        <a
+          href="https://core.telegram.org/bots/api"
+          target="_blank"
+          rel="noreferrer"
+          className="text-blue-700 hover:underline"
+        >
+          Bot API docs
+        </a>
+        .
       </p>
     </section>
   );

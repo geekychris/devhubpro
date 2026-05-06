@@ -15,6 +15,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -24,6 +25,16 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<Map<String, Object>> notFound(NotFoundException e) {
         return body(HttpStatus.NOT_FOUND, e.getMessage(), null);
+    }
+
+    /**
+     * Plain 404s on routes that don't exist — e.g. malformed URLs, stale bookmarks, polling
+     * for a path that's not a controller. These are routine and shouldn't print a stack trace
+     * the way the catch-all {@link Exception} handler does.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> noResource(NoResourceFoundException e) {
+        return body(HttpStatus.NOT_FOUND, "No such resource: " + e.getResourcePath(), null);
     }
 
     @ExceptionHandler(ConflictException.class)
