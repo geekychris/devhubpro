@@ -6,26 +6,35 @@ import { MetaAssetsPage } from './pages/MetaAssetsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { BulkImportPage } from './pages/BulkImportPage';
 import { PortsPage } from './pages/PortsPage';
+import { DashboardPage } from './pages/DashboardPage';
 import { SearchBar } from './components/SearchBar';
 
 export function App() {
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="border-b border-gray-200 bg-white">
+      <header className="border-b border-gray-800 bg-slate-900 text-gray-100">
         <div className="max-w-7xl mx-auto px-6 py-3 flex items-center gap-6">
           <Link to="/" className="shrink-0" aria-label="DevHub Pro home">
             <img
               src="/devhubpro.png"
               alt="DevHub Pro"
-              className="h-12 w-auto"
+              className="h-auto w-[300px]"
             />
           </Link>
           <SearchBar />
           <nav className="flex gap-4 text-sm ml-auto">
             <NavLink
+              to="/dashboard"
+              className={({ isActive }) =>
+                isActive ? 'text-blue-400 font-medium' : 'text-gray-300 hover:text-white'
+              }
+            >
+              Dashboard
+            </NavLink>
+            <NavLink
               to="/assets"
               className={({ isActive }) =>
-                isActive ? 'text-blue-700 font-medium' : 'text-gray-600 hover:text-gray-900'
+                isActive ? 'text-blue-400 font-medium' : 'text-gray-300 hover:text-white'
               }
             >
               Assets
@@ -33,7 +42,7 @@ export function App() {
             <NavLink
               to="/meta-assets"
               className={({ isActive }) =>
-                isActive ? 'text-blue-700 font-medium' : 'text-gray-600 hover:text-gray-900'
+                isActive ? 'text-blue-400 font-medium' : 'text-gray-300 hover:text-white'
               }
             >
               Meta-assets
@@ -41,7 +50,7 @@ export function App() {
             <NavLink
               to="/ports"
               className={({ isActive }) =>
-                isActive ? 'text-blue-700 font-medium' : 'text-gray-600 hover:text-gray-900'
+                isActive ? 'text-blue-400 font-medium' : 'text-gray-300 hover:text-white'
               }
             >
               Ports
@@ -49,7 +58,7 @@ export function App() {
             <NavLink
               to="/register"
               className={({ isActive }) =>
-                isActive ? 'text-blue-700 font-medium' : 'text-gray-600 hover:text-gray-900'
+                isActive ? 'text-blue-400 font-medium' : 'text-gray-300 hover:text-white'
               }
             >
               Register
@@ -57,7 +66,7 @@ export function App() {
             <NavLink
               to="/bulk-import"
               className={({ isActive }) =>
-                isActive ? 'text-blue-700 font-medium' : 'text-gray-600 hover:text-gray-900'
+                isActive ? 'text-blue-400 font-medium' : 'text-gray-300 hover:text-white'
               }
             >
               Bulk import
@@ -65,7 +74,7 @@ export function App() {
             <NavLink
               to="/settings"
               className={({ isActive }) =>
-                isActive ? 'text-blue-700 font-medium' : 'text-gray-600 hover:text-gray-900'
+                isActive ? 'text-blue-400 font-medium' : 'text-gray-300 hover:text-white'
               }
             >
               Settings
@@ -75,7 +84,8 @@ export function App() {
       </header>
       <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-6">
         <Routes>
-          <Route path="/" element={<AssetsPage />} />
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/assets" element={<AssetsPage />} />
           <Route path="/assets/:id" element={<AssetDetailPage />} />
           <Route path="/meta-assets" element={<MetaAssetsPage />} />

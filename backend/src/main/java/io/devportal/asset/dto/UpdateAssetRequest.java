@@ -15,5 +15,6 @@ public record UpdateAssetRequest(
     String lifecycle,
     String k8sNamespace,
     Boolean favorite,
-    Integer rating
+    Integer rating,
+    Boolean dashboardPinned
 ) {}

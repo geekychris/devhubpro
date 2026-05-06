@@ -9,7 +9,7 @@ import { StarRating } from './StarRating';
 export function FavoriteRatingBar({ asset }: { asset: Asset }) {
   const qc = useQueryClient();
   const patch = useMutation({
-    mutationFn: (body: Partial<{ favorite: boolean; rating: number | null }>) =>
+    mutationFn: (body: Partial<{ favorite: boolean; rating: number | null; dashboardPinned: boolean }>) =>
       api.updateAsset(asset.id, body),
     onMutate: async (body) => {
       await qc.cancelQueries({ queryKey: ['asset', asset.id] });
@@ -48,6 +48,20 @@ export function FavoriteRatingBar({ asset }: { asset: Asset }) {
         value={asset.rating}
         onChange={(rating) => patch.mutate({ rating })}
       />
+      <span className="h-4 w-px bg-gray-200" />
+      <button
+        type="button"
+        onClick={() => patch.mutate({ dashboardPinned: !asset.dashboardPinned })}
+        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-50"
+        title={asset.dashboardPinned ? 'Unpin from dashboard' : 'Pin to dashboard (start/stop from running services view)'}
+      >
+        <span style={{ color: asset.dashboardPinned ? '#ca8a04' : '#9ca3af' }}>
+          {asset.dashboardPinned ? '★' : '☆'}
+        </span>
+        <span className={asset.dashboardPinned ? 'font-medium text-gray-900' : 'text-gray-500'}>
+          {asset.dashboardPinned ? 'Pinned to dashboard' : 'Pin to dashboard'}
+        </span>
+      </button>
       {patch.error && (
         <span className="text-xs text-red-600">{(patch.error as Error).message}</span>
       )}

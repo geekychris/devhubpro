@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1440" height="2843" viewBox="0 0 1440 2843">
+  <rect width="100%" height="100%" fill="#ffffff" />
+  <text x="24" y="28" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="600" fill="#0f172a">Panels tab — at-a-glance asset dossier</text>
+  <text x="24" y="46" font-family="Inter, system-ui, sans-serif" font-size="14" fill="#6b7280">Auto-generated panels (GitHub, manifest, endpoints, health, audit, recent commits …) — opt-in info, not a tab cliff.</text>
+  <image href="05-asset-panels.png" x="0" y="56" width="1440" height="2513" preserveAspectRatio="xMidYMin meet" />
+  <g transform="translate(0, 56)">
+  <rect x="108" y="165" width="600" height="220" fill="none" stroke="#ef4444" stroke-width="3" rx="4" ry="4" />
+  <rect x="770" y="165" width="580" height="220" fill="none" stroke="#ef4444" stroke-width="3" rx="4" ry="4" />
+  <rect x="108" y="405" width="600" height="380" fill="none" stroke="#ef4444" stroke-width="3" rx="4" ry="4" />
+  <rect x="770" y="405" width="580" height="280" fill="none" stroke="#ef4444" stroke-width="3" rx="4" ry="4" />
+  <rect x="108" y="870" width="600" height="380" fill="none" stroke="#ef4444" stroke-width="3" rx="4" ry="4" />
+  <rect x="770" y="870" width="580" height="280" fill="none" stroke="#ef4444" stroke-width="3" rx="4" ry="4" />
+  <rect x="108" y="1380" width="600" height="320" fill="none" stroke="#ef4444" stroke-width="3" rx="4" ry="4" />
+  <rect x="770" y="1380" width="580" height="320" fill="none" stroke="#ef4444" stroke-width="3" rx="4" ry="4" />
+  <rect x="108" y="2050" width="600" height="380" fill="none" stroke="#ef4444" stroke-width="3" rx="4" ry="4" />
+  
+  <circle cx="280" cy="200" r="20" fill="white" />
+  <circle cx="280" cy="200" r="18" fill="#ef4444" />
+  <text x="280" y="206" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">1</text>
+  <circle cx="1100" cy="200" r="20" fill="white" />
+  <circle cx="1100" cy="200" r="18" fill="#ef4444" />
+  <text x="1100" y="206" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">2</text>
+  <circle cx="280" cy="470" r="20" fill="white" />
+  <circle cx="280" cy="470" r="18" fill="#ef4444" />
+  <text x="280" y="476" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">3</text>
+  <circle cx="1100" cy="470" r="20" fill="white" />
+  <circle cx="1100" cy="470" r="18" fill="#ef4444" />
+  <text x="1100" y="476" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">4</text>
+  <circle cx="280" cy="980" r="20" fill="white" />
+  <circle cx="280" cy="980" r="18" fill="#ef4444" />
+  <text x="280" y="986" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">5</text>
+  <circle cx="1100" cy="980" r="20" fill="white" />
+  <circle cx="1100" cy="980" r="18" fill="#ef4444" />
+  <text x="1100" y="986" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">6</text>
+  <circle cx="280" cy="1530" r="20" fill="white" />
+  <circle cx="280" cy="1530" r="18" fill="#ef4444" />
+  <text x="280" y="1536" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">7</text>
+  <circle cx="1100" cy="1530" r="20" fill="white" />
+  <circle cx="1100" cy="1530" r="18" fill="#ef4444" />
+  <text x="1100" y="1536" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">8</text>
+  <circle cx="280" cy="2200" r="20" fill="white" />
+  <circle cx="280" cy="2200" r="18" fill="#ef4444" />
+  <text x="280" y="2206" font-family="Inter, system-ui, sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">9</text>
+  </g>
+  <rect x="0" y="2569" width="1440" height="274" fill="#f9fafb" stroke="#e5e7eb" />
+  
+  <circle cx="38" cy="2601" r="13" fill="#ef4444" />
+  <text x="38" y="2606.5" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">1</text>
+  <text x="62" y="2607" font-family="Inter, system-ui, sans-serif" font-size="15" fill="#1f2937">GitHub panel — repo URL, default branch, owner, lifecycle, derived from the registered remote.</text>
+  <circle cx="38" cy="2627" r="13" fill="#ef4444" />
+  <text x="38" y="2632.5" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">2</text>
+  <text x="62" y="2633" font-family="Inter, system-ui, sans-serif" font-size="15" fill="#1f2937">Workspace panel — JGit-managed local checkout + sync state.</text>
+  <circle cx="38" cy="2653" r="13" fill="#ef4444" />
+  <text x="38" y="2658.5" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">3</text>
+  <text x="62" y="2659" font-family="Inter, system-ui, sans-serif" font-size="15" fill="#1f2937">Manifest panel — devportal.yaml summary (id, type, language, exposed ports, fixtures…).</text>
+  <circle cx="38" cy="2679" r="13" fill="#ef4444" />
+  <text x="38" y="2684.5" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">4</text>
+  <text x="62" y="2685" font-family="Inter, system-ui, sans-serif" font-size="15" fill="#1f2937">Health checks — every host-reachable URL probed in parallel with the latency printed.</text>
+  <circle cx="38" cy="2705" r="13" fill="#ef4444" />
+  <text x="38" y="2710.5" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">5</text>
+  <text x="62" y="2711" font-family="Inter, system-ui, sans-serif" font-size="15" fill="#1f2937">Quick actions — direct deep-links to every Web UI / API / WebSocket the manifest declares.</text>
+  <circle cx="38" cy="2731" r="13" fill="#ef4444" />
+  <text x="38" y="2736.5" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">6</text>
+  <text x="62" y="2737" font-family="Inter, system-ui, sans-serif" font-size="15" fill="#1f2937">Recent activity — last n commits across the workspace.</text>
+  <circle cx="38" cy="2757" r="13" fill="#ef4444" />
+  <text x="38" y="2762.5" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">7</text>
+  <text x="62" y="2763" font-family="Inter, system-ui, sans-serif" font-size="15" fill="#1f2937">Endpoints / detected services — runtime ports surfaced as live URLs.</text>
+  <circle cx="38" cy="2783" r="13" fill="#ef4444" />
+  <text x="38" y="2788.5" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">8</text>
+  <text x="62" y="2789" font-family="Inter, system-ui, sans-serif" font-size="15" fill="#1f2937">Audit panel — manifest validation findings + lifecycle/runtime warnings.</text>
+  <circle cx="38" cy="2809" r="13" fill="#ef4444" />
+  <text x="38" y="2814.5" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">9</text>
+  <text x="62" y="2815" font-family="Inter, system-ui, sans-serif" font-size="15" fill="#1f2937">Discovered sources — ports, services, env vars the analyzer found in the actual code.</text>
+</svg>

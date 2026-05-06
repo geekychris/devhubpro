@@ -16,6 +16,7 @@ Postgres is the database of record. Workspaces, secrets, logs, and rendered mani
 
 - [Architecture](#architecture)
 - [What it does](#what-it-does)
+- [Tour](#tour)
 - [Quickstart](#quickstart)
 - [Repository layout](#repository-layout)
 - [Configuration](#configuration)
@@ -131,6 +132,72 @@ The backend is the single trust boundary. The frontend talks to it over HTTP via
 ### UI extensibility
 - Build-time React component split per concern (assets, builds, runtime, analyze, docs, panels).
 - **Server-driven panels** — `GET /api/assets/{id}/panels` returns a list of `kv | list | code | links` panels rendered generically by the frontend; new panels can be added server-side without touching the UI.
+
+---
+
+## Tour
+
+A walk through the UI. Numbered markers point to the corresponding entry in the legend strip underneath each image.
+
+### Dashboard — pinned services with one-click start/stop
+
+Pin any asset to the dashboard and start/stop its whole runtime closure (the asset plus every transitive runtime producer) from a single button — `Start` runs `kubectl apply` and the lifecycle hooks, `Stop` runs `kubectl delete`. The live chip turns green as soon as any declared endpoint is reachable. Web UI quick-links, auto-detected Swagger URLs, and credential-fixture quick-links are promoted out of the manifest. `Hide off` collapses stopped cards so the dashboard is just whatever is running right now.
+
+![Dashboard](docs/img/01-dashboard-annotated.png)
+
+### Assets list — search, filter, favorites, ratings
+
+Catalog of every registered asset. Pinned 5-star favorites surface in a top strip so they're always one click away. Multi-term search defaults to OR across name / description / tags / owner / language / repo URL; the `all of` toggle forces AND. Filter by type (library, service, infra, …) or hide everything except favorites.
+
+![Assets list](docs/img/02-assets-list-annotated.png)
+
+### Global search — assets and full-text doc hits
+
+The header search drops down with asset matches alongside full-text hits inside every workspace's `.md` files, with line-number snippets and the matching term highlighted.
+
+![Search results](docs/img/03-search-results-annotated.png)
+
+### Asset detail — overview tab
+
+Per-asset detail with the full tab strip — overview, dependencies, graph, builds, runtime, cluster, analyze, changes, fixtures, docs, panels. Favorite, rate, and pin from the top bar. **Ask Claude** opens an annotated context dump tailored to this asset (manifest, deps, recent commits, …). Tags share a single namespace across the whole catalog with autocomplete.
+
+![Asset overview](docs/img/04-asset-overview-annotated.png)
+
+### Panels tab — at-a-glance dossier
+
+Auto-generated panels — GitHub, workspace, manifest summary, health checks, quick actions, recent activity, endpoints, audit findings, and discovered sources from the analyzer. Opt-in info, not a tab cliff. Server-driven, so new panels can be added backend-side without touching the UI.
+
+![Panels](docs/img/05-asset-panels-annotated.png)
+
+### Dependency graph — producers and consumers
+
+Interactive React Flow graph laid out by dagre, with edge labels for the dependency kind (`build`, `runtime`, `data`, …) read straight from the manifest. Direction filter (producers / consumers / both), independent producer and consumer depth caps so you can include direct callers without exploding the graph, layout toggle (`producers right` / `producers down`), and a fullscreen viewer for very large graphs.
+
+![Dependency graph](docs/img/06-asset-graph-annotated.png)
+
+### Test fixtures — surfaced credentials and seed data
+
+Fixtures emit a structured `DEVPORTAL_FIXTURE:` JSON line so the portal extracts usernames, passwords, login URLs and roles, and renders them in a credentials table with click-to-copy passwords. Quick-launch links open the right URL signed in as the right user in one click. Each run captures exit code, duration, timestamp, and the full log behind `Show log`.
+
+![Fixtures](docs/img/07-asset-fixtures-annotated.png)
+
+### Docs tab — markdown with rendered Mermaid
+
+Every `.md` in the asset workspace is browseable from a sidebar tree. Mermaid blocks render to SVG inline; mermaid is dynamic-imported so the docs page only pays for it when needed. The renderer falls back to a styled error block on bad syntax, and `Raw` links back to the original markdown for copy-pasting to GitHub.
+
+![Docs](docs/img/08-asset-docs-annotated.png)
+
+### Runtime tab — ports, docker, kubectl
+
+All runtime surfaces in one view: the port registry slots for this asset (allocate / release in `local` or `k8s-nodeport` scope), local docker images, and the kubectl apply target. `+ dependents` applies the full runtime closure — this asset and every transitive runtime producer.
+
+![Runtime](docs/img/09-asset-runtime-annotated.png)
+
+### Port registry — every port the portal knows about
+
+Three sources unified: local docker host ports, Kubernetes NodePorts, and active `kubectl port-forward` tunnels. Single registry across the whole portal, so two assets can never collide on a port. Filter by asset id, port, URL, or pod name; group by scope or by asset; click any URL to copy it for Postman / curl / browser.
+
+![Port registry](docs/img/10-ports-annotated.png)
 
 ---
 
@@ -481,11 +548,11 @@ sequenceDiagram
     API->>K: kubectl apply -f rendered/
     K-->>API: applied
     loop each runOnApply fixture in declaration order
-        API->>Cmd: bash <command> in workspace cwd
-        Cmd-->>API: stdout w/ DEVPORTAL_FIXTURE: {json}
-        API->>API: parse JSON; record build row
+        API->>Cmd: bash [command] in workspace cwd
+        Cmd-->>API: stdout includes DEVPORTAL_FIXTURE JSON line
+        API->>API: parse JSON, record build row
     end
-    API-->>UI: { apply: {...}, hookResults: [...] }
+    API-->>UI: response with apply result and hookResults
     UI->>User: credentials table + summary + links
 ```
 

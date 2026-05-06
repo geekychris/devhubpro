@@ -1,0 +1,143 @@
+{
+  "shots": [
+    {
+      "file": "01-dashboard.png",
+      "title": "Dashboard — pinned services with one-click start/stop",
+      "blurb": "Pin any asset to the dashboard; Start/Stop drives kubectl apply/delete on the runtime closure.",
+      "imgH": 997,
+      "callouts": [
+        { "x": 1136, "y": 323, "rect": [1106, 308, 60, 30], "label": "Start — kubectl apply for the asset and every runtime dependency, then runs lifecycle hooks." },
+        { "x": 1195, "y": 323, "rect": [1166, 308, 60, 30], "label": "Stop — kubectl delete for the same closure." },
+        { "x": 1240, "y": 323, "rect": [1224, 308, 32, 30], "label": "Pin/unpin: pinned assets persist on the dashboard even when stopped." },
+        { "x": 995, "y": 322, "rect": [977, 312, 38, 22], "label": "Live status chip — turns green when any endpoint of the asset is reachable." },
+        { "x": 809, "y": 473, "rect": [745, 458, 130, 32], "label": "Web UI quick-link — promoted from manifest endpoints with role: \"Web UI\"." },
+        { "x": 967, "y": 532, "rect": [892, 519, 152, 28], "label": "Auto-detected Swagger / OpenAPI URL — probes /v3/api-docs and friends and caches per-host." },
+        { "x": 807, "y": 591, "rect": [745, 577, 188, 30], "label": "Credential fixtures — quick-link to a fixture that surfaces seeded test accounts." },
+        { "x": 1241, "y": 265, "rect": [1208, 252, 70, 26], "label": "Hide off — collapses stopped cards out of view; turn back on with one click." }
+      ]
+    },
+    {
+      "file": "02-assets-list.png",
+      "title": "Assets — search, filter, favorites, ratings",
+      "blurb": "Catalog of every registered asset. Multi-term search defaults to OR; \"all of\" forces AND.",
+      "imgH": 900,
+      "callouts": [
+        { "x": 720, "y": 355, "rect": [108, 296, 1224, 117], "label": "Top favorites strip — pinned 5-star favorites surface first so they're always one click away." },
+        { "x": 586, "y": 447, "rect": [168, 430, 836, 35], "label": "Multi-term search box — \"all of …\" forces AND across name/description/tags/owner/language/repo." },
+        { "x": 1077, "y": 447, "rect": [1017, 430, 121, 35], "label": "Type filter — narrow to libraries, services, infra, etc." },
+        { "x": 1210, "y": 447, "rect": [1149, 437, 124, 22], "label": "Favorites-only toggle." },
+        { "x": 200, "y": 533, "rect": [108, 510, 800, 80], "label": "Per-asset row: ♥ favorite + ★★★★★ rating + tags + lifecycle chip + repo description." }
+      ]
+    },
+    {
+      "file": "03-search-results.png",
+      "title": "Global search — assets and full-text doc hits",
+      "blurb": "The header search drops down with asset matches plus full-text hits inside every workspace's .md files.",
+      "imgH": 900,
+      "callouts": [
+        { "x": 588, "y": 112, "rect": [430, 95, 320, 36], "label": "Multi-term query — typing redis matches across asset metadata + docs simultaneously." },
+        { "x": 588, "y": 220, "rect": [432, 175, 462, 110], "label": "Asset matches — id / name / description / tags / language / owner / repo url." },
+        { "x": 588, "y": 380, "rect": [432, 285, 462, 215], "label": "Doc hits — full-text scan of every workspace's markdown with line-number snippets and the matching term highlighted." }
+      ]
+    },
+    {
+      "file": "04-asset-overview.png",
+      "title": "Asset detail — overview tab",
+      "imgH": 1117,
+      "callouts": [
+        { "x": 720, "y": 356, "rect": [108, 343, 1064, 30], "label": "Tab strip — overview, dependencies, graph, builds, runtime, cluster, analyze, changes, fixtures, docs, panels." },
+        { "x": 247, "y": 408, "rect": [180, 396, 140, 32], "label": "Favorite toggle — boosts the asset to the Top Favorites strip on the assets page." },
+        { "x": 460, "y": 408, "rect": [355, 396, 207, 32], "label": "5-star rating — sortable + filterable across the whole catalog." },
+        { "x": 670, "y": 408, "rect": [510, 396, 320, 32], "label": "Pin to dashboard — adds this asset to the running-services dashboard so you can start/stop it from there." },
+        { "x": 1088, "y": 287, "rect": [1041, 270, 100, 36], "label": "Ask Claude — opens an annotated context dump tailored to this asset (manifest, deps, recent commits…)." },
+        { "x": 377, "y": 811, "rect": [180, 760, 1054, 80], "label": "Tag editor with autocomplete — shared tag namespace across the catalog." }
+      ]
+    },
+    {
+      "file": "05-asset-panels.png",
+      "title": "Panels tab — at-a-glance asset dossier",
+      "blurb": "Auto-generated panels (GitHub, manifest, endpoints, health, audit, recent commits …) — opt-in info, not a tab cliff.",
+      "imgH": 2513,
+      "callouts": [
+        { "x": 280, "y": 200, "rect": [108, 165, 600, 220], "label": "GitHub panel — repo URL, default branch, owner, lifecycle, derived from the registered remote." },
+        { "x": 1100, "y": 200, "rect": [770, 165, 580, 220], "label": "Workspace panel — JGit-managed local checkout + sync state." },
+        { "x": 280, "y": 470, "rect": [108, 405, 600, 380], "label": "Manifest panel — devportal.yaml summary (id, type, language, exposed ports, fixtures…)." },
+        { "x": 1100, "y": 470, "rect": [770, 405, 580, 280], "label": "Health checks — every host-reachable URL probed in parallel with the latency printed." },
+        { "x": 280, "y": 980, "rect": [108, 870, 600, 380], "label": "Quick actions — direct deep-links to every Web UI / API / WebSocket the manifest declares." },
+        { "x": 1100, "y": 980, "rect": [770, 870, 580, 280], "label": "Recent activity — last n commits across the workspace." },
+        { "x": 280, "y": 1530, "rect": [108, 1380, 600, 320], "label": "Endpoints / detected services — runtime ports surfaced as live URLs." },
+        { "x": 1100, "y": 1530, "rect": [770, 1380, 580, 320], "label": "Audit panel — manifest validation findings + lifecycle/runtime warnings." },
+        { "x": 280, "y": 2200, "rect": [108, 2050, 600, 380], "label": "Discovered sources — ports, services, env vars the analyzer found in the actual code." }
+      ]
+    },
+    {
+      "file": "06-asset-graph.png",
+      "title": "Dependency graph — producers and consumers",
+      "blurb": "Interactive React Flow graph; auto-laid-out via dagre, with edge labels for the dependency kind.",
+      "imgH": 900,
+      "callouts": [
+        { "x": 328, "y": 437, "rect": [180, 420, 296, 35], "label": "Direction filter — producers, consumers, or both." },
+        { "x": 553, "y": 437, "rect": [486, 420, 137, 35], "label": "Producer depth — limit transitive walk (0 = root only, -1 = unlimited)." },
+        { "x": 745, "y": 437, "rect": [630, 420, 137, 35], "label": "Consumer depth — separate cap so you can include direct callers without exploding the graph." },
+        { "x": 285, "y": 498, "rect": [212, 488, 145, 22], "label": "Layout direction — producers right (LR) or producers down (TB)." },
+        { "x": 1218, "y": 498, "rect": [1170, 488, 100, 22], "label": "Fullscreen — pop the canvas out for very large graphs." },
+        { "x": 1243, "y": 607, "rect": [1230, 595, 28, 28], "label": "ReactFlow controls — zoom in/out, fit-to-view, lock pan." },
+        { "x": 720, "y": 800, "rect": [108, 685, 1224, 200], "label": "Nodes coloured by dependency kind; edge labels (\"build\", \"runtime\", \"data\"…) come straight from the manifest." }
+      ]
+    },
+    {
+      "file": "07-asset-fixtures.png",
+      "title": "Test fixtures — surfaced credentials and seed data",
+      "blurb": "Fixtures emit a structured DEVPORTAL_FIXTURE: line so the portal can extract usernames, passwords, login URLs and render them in the UI.",
+      "imgH": 900,
+      "callouts": [
+        { "x": 236, "y": 416, "rect": [180, 404, 130, 28], "label": "Fixture name + description from devportal.yaml." },
+        { "x": 1230, "y": 356, "rect": [1170, 340, 102, 32], "label": "Run / Run again — invokes the script in the asset workspace and streams its log." },
+        { "x": 253, "y": 505, "rect": [195, 495, 130, 22], "label": "Run status — exit code, duration, timestamp, full log behind \"Show log\"." },
+        { "x": 720, "y": 644, "rect": [180, 570, 1080, 150], "label": "Parsed credentials table — DEVPORTAL_FIXTURE: contract emits username/password/role/url tuples." },
+        { "x": 349, "y": 740, "rect": [180, 720, 510, 30], "label": "Quick-launch links — open the right URL signed in as the right user in one click." }
+      ]
+    },
+    {
+      "file": "08-asset-docs.png",
+      "title": "Docs tab — markdown with rendered Mermaid",
+      "blurb": "Every .md in the asset workspace is browseable; mermaid blocks render to SVG inline (lazy-loaded so the bundle stays small).",
+      "imgH": 2200,
+      "callouts": [
+        { "x": 230, "y": 600, "rect": [108, 200, 250, 1900], "label": "File tree — every .md found in the asset's local workspace, sorted by path." },
+        { "x": 230, "y": 380, "rect": [108, 365, 256, 28], "label": "Active doc highlighted — click any file to load it." },
+        { "x": 1245, "y": 200, "rect": [1180, 192, 70, 22], "label": "Raw — link to the original markdown for copy/pasting back to GitHub." },
+        { "x": 800, "y": 1450, "rect": [400, 1330, 700, 480], "label": "Mermaid diagram rendered to SVG inline — mermaid is dynamic-imported on demand so the docs page only pays for it when needed." },
+        { "x": 800, "y": 2050, "rect": [400, 1900, 700, 280], "label": "Multiple diagrams per doc render concurrently; the renderer falls back to a styled error block on bad syntax." }
+      ]
+    },
+    {
+      "file": "09-asset-runtime.png",
+      "title": "Runtime tab — ports, docker images, kubectl",
+      "blurb": "All runtime surfaces in one view: the port registry, local docker images, and kubectl apply targets.",
+      "imgH": 900,
+      "callouts": [
+        { "x": 242, "y": 417, "rect": [180, 405, 280, 28], "label": "Port reservations — registry-managed slots so two assets never collide." },
+        { "x": 958, "y": 417, "rect": [910, 402, 100, 32], "label": "Allocate local — reserves a host port from the 18000-18999 range." },
+        { "x": 1084, "y": 417, "rect": [1010, 402, 152, 32], "label": "Allocate NodePort — reserves a slot from 30000-32767 for kubectl exposure." },
+        { "x": 1217, "y": 417, "rect": [1162, 402, 110, 32], "label": "Release — frees the slot back to the registry." },
+        { "x": 208, "y": 681, "rect": [180, 670, 80, 24], "label": "Docker images section — shows running containers and their status." },
+        { "x": 1105, "y": 681, "rect": [1055, 668, 102, 32], "label": "+ dependents — apply the runtime closure (this asset and every transitive runtime producer)." }
+      ]
+    },
+    {
+      "file": "10-ports.png",
+      "title": "Port registry — every port the portal knows about",
+      "blurb": "Three sources unified: local docker host ports, Kubernetes NodePorts, and active kubectl port-forward tunnels.",
+      "imgH": 900,
+      "callouts": [
+        { "x": 720, "y": 265, "rect": [108, 248, 1224, 36], "label": "Single registry across the whole portal — no two assets get the same port." },
+        { "x": 576, "y": 347, "rect": [180, 330, 793, 36], "label": "Filter — by asset id, port, URL, or pod name." },
+        { "x": 1067, "y": 347, "rect": [1024, 335, 90, 26], "label": "Group toggle — by scope (local/nodeport/forward) or by asset." },
+        { "x": 264, "y": 412, "rect": [180, 396, 200, 26], "label": "Local docker section — host ports backing local containers." },
+        { "x": 264, "y": 750, "rect": [180, 730, 600, 30], "label": "Kubernetes NodePort section — Rancher Desktop forwards these straight to localhost." },
+        { "x": 1300, "y": 525, "rect": [1245, 442, 50, 320], "label": "Click-to-copy URLs make it trivial to paste a NodePort URL into Postman / curl / browser." }
+      ]
+    }
+  ]
+}

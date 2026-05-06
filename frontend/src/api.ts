@@ -12,6 +12,7 @@ export type Asset = {
   k8sNamespace: string | null;
   favorite: boolean;
   rating: number | null;
+  dashboardPinned: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -198,6 +199,36 @@ export type FrontendScaffoldResult = {
   message: string;
 };
 
+export type DashboardEntry = {
+  asset: {
+    id: string;
+    name: string;
+    description: string | null;
+    type: string;
+    language: string | null;
+    lifecycle: string;
+    repoUrl: string;
+    favorite: boolean;
+    rating: number | null;
+    dashboardPinned: boolean;
+    tags: string[];
+  };
+  endpoints: {
+    label: string;
+    url: string;
+    scope: string;
+    origin: string;
+    live: boolean;
+    hostAccessible: boolean;
+    exposeHint: { kind: string; podName: string; containerPort: number } | null;
+  }[];
+  uiEndpoints: { label: string; url: string; role: string; live: boolean }[];
+  apiEndpoints: { label: string; url: string; role: string; live: boolean }[];
+  swaggerUrl: string | null;
+  credentialFixtures: TestFixture[];
+  live: boolean;
+};
+
 export type TestFixture = {
   name: string;
   description: string | null;
@@ -323,6 +354,7 @@ export type UpdateAssetBody = Partial<{
   k8sNamespace: string | null;
   favorite: boolean;
   rating: number | null;
+  dashboardPinned: boolean;
 }>;
 
 export type GitHubRepoSummary = {
@@ -586,6 +618,9 @@ export const api = {
       `/api/assets/${assetId}/scaffold-frontend?path=${encodeURIComponent(path)}`,
       { method: 'POST' }
     ),
+
+  // ---- dashboard ----
+  dashboardRunning: () => request<DashboardEntry[]>('/api/dashboard/running'),
 
   // ---- test fixtures ----
   listTestFixtures: (assetId: string) =>

@@ -181,6 +181,7 @@ public class SearchService {
             rs.getString("k8s_namespace"),
             rs.getBoolean("favorite"),
             ratingObj == null ? null : rs.getInt("rating"),
+            rs.getBoolean("dashboard_pinned"),
             c == null ? null : c.toInstant(),
             u == null ? null : u.toInstant()
         );

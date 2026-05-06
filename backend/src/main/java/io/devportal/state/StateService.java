@@ -169,6 +169,7 @@ public class StateService {
             (String) doc.getOrDefault("lifecycle", "experimental"),
             (String) doc.get("k8sNamespace"),
             favorite, rating,
+            Boolean.TRUE.equals(doc.get("dashboardPinned")),
             null, null
         );
     }

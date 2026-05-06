@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { marked } from 'marked';
 import { api } from '../api';
+import { MarkdownView } from './MarkdownView';
 
 export function DocsTab({ assetId }: { assetId: string }) {
   const list = useQuery({
@@ -78,9 +78,9 @@ function DocViewer({ assetId, path }: { assetId: string; path: string }) {
           {doc.data}
         </pre>
       ) : (
-        <div
-          className="prose prose-sm max-w-none px-6 py-4 max-h-[70vh] overflow-auto"
-          dangerouslySetInnerHTML={{ __html: marked.parse(doc.data, { async: false }) as string }}
+        <MarkdownView
+          source={doc.data}
+          className="max-w-none px-6 py-4 max-h-[70vh] overflow-auto"
         />
       )}
     </article>

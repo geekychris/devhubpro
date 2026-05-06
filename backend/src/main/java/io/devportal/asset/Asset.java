@@ -18,6 +18,7 @@ public record Asset(
     String k8sNamespace,    // nullable; null means "use asset id" or fall through to manifest/default
     boolean favorite,
     Integer rating,         // nullable; null = unrated, otherwise 1..5
+    boolean dashboardPinned,
     Instant createdAt,
     Instant updatedAt
 ) {}

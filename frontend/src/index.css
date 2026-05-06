@@ -11,3 +11,37 @@ body {
   background: #f9fafb;
   color: #111827;
 }
+
+/* Inline markdown styling — used by DocsTab + any rendered .md output. The Tailwind
+   typography plugin isn't installed; the rules below cover the common elements at the
+   sizes our app uses. Scoped to .markdown so it only applies where opted in. */
+.markdown { color: #1f2937; line-height: 1.6; font-size: 14px; }
+.markdown h1 { font-size: 1.65em; font-weight: 700; margin: 1.2em 0 0.5em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3em; }
+.markdown h2 { font-size: 1.35em; font-weight: 700; margin: 1.2em 0 0.4em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.2em; }
+.markdown h3 { font-size: 1.15em; font-weight: 600; margin: 1em 0 0.3em; }
+.markdown h4 { font-size: 1.05em; font-weight: 600; margin: 0.9em 0 0.3em; }
+.markdown p { margin: 0.6em 0; }
+.markdown ul, .markdown ol { padding-left: 1.5em; margin: 0.5em 0; }
+.markdown ul { list-style: disc; }
+.markdown ol { list-style: decimal; }
+.markdown li { margin: 0.25em 0; }
+.markdown li > p { margin: 0.2em 0; }
+.markdown code { background: #f3f4f6; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; color: #be185d; }
+.markdown pre { background: #f9fafb; padding: 0.8em 1em; border-radius: 6px; overflow-x: auto; border: 1px solid #e5e7eb; margin: 0.7em 0; }
+.markdown pre code { background: transparent; padding: 0; color: #1f2937; font-size: 0.85em; }
+.markdown blockquote { border-left: 3px solid #d1d5db; padding-left: 1em; margin: 0.7em 0; color: #4b5563; font-style: italic; }
+.markdown a { color: #2563eb; text-decoration: underline; }
+.markdown a:hover { color: #1d4ed8; }
+.markdown table { border-collapse: collapse; margin: 0.8em 0; width: auto; }
+.markdown th, .markdown td { border: 1px solid #e5e7eb; padding: 0.4em 0.7em; text-align: left; vertical-align: top; }
+.markdown th { background: #f9fafb; font-weight: 600; }
+.markdown img { max-width: 100%; height: auto; border-radius: 4px; }
+.markdown hr { border: 0; border-top: 1px solid #e5e7eb; margin: 1.5em 0; }
+.markdown strong { font-weight: 700; }
+.markdown em { font-style: italic; }
+
+/* Mermaid diagrams rendered via MarkdownView. The replaced wrapper carries .mermaid-rendered. */
+.markdown .mermaid-rendered { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 0.75em; }
+.markdown .mermaid-rendered svg { display: block; max-width: 100%; height: auto; }
+.markdown .mermaid-error { border: 1px solid #fca5a5; background: #fef2f2; }
+.markdown .mermaid-error-msg { color: #b91c1c; font-size: 0.85em; padding: 0.5em 0.75em; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 4px; margin: 0.5em 0; }

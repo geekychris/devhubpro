@@ -34,6 +34,7 @@ public class AssetRepository {
         rs.getString("k8s_namespace"),
         rs.getBoolean("favorite"),
         rs.getObject("rating") == null ? null : rs.getInt("rating"),
+        rs.getBoolean("dashboard_pinned"),
         toInstant(rs.getTimestamp("created_at")),
         toInstant(rs.getTimestamp("updated_at"))
     );
@@ -153,9 +154,9 @@ public class AssetRepository {
         jdbc.sql("""
             INSERT INTO asset (id, name, description, owner, type, language, repo_url,
                                repo_default_branch, tags, lifecycle, k8s_namespace,
-                               favorite, rating)
+                               favorite, rating, dashboard_pinned)
             VALUES (:id, :name, :description, :owner, :type, :language, :repo_url,
-                    :branch, :tags, :lifecycle, :ns, :favorite, :rating)
+                    :branch, :tags, :lifecycle, :ns, :favorite, :rating, :pinned)
             """)
             .param("id", a.id())
             .param("name", a.name())
@@ -170,6 +171,7 @@ public class AssetRepository {
             .param("ns", a.k8sNamespace() != null ? a.k8sNamespace() : a.id())
             .param("favorite", a.favorite())
             .param("rating", a.rating())
+            .param("pinned", a.dashboardPinned())
             .update();
     }
 
@@ -187,7 +189,8 @@ public class AssetRepository {
               lifecycle = :lifecycle,
               k8s_namespace = :ns,
               favorite = :favorite,
-              rating = :rating
+              rating = :rating,
+              dashboard_pinned = :pinned
             WHERE id = :id
             """)
             .param("id", a.id())
@@ -203,6 +206,7 @@ public class AssetRepository {
             .param("ns", a.k8sNamespace())
             .param("favorite", a.favorite())
             .param("rating", a.rating())
+            .param("pinned", a.dashboardPinned())
             .update();
     }
 
