@@ -581,6 +581,59 @@ export const api = {
   releasePorts: (assetId: string, scope: 'local' | 'k8s-nodeport' = 'local') =>
     request<{ released: number }>(`/api/assets/${assetId}/ports?scope=${scope}`, { method: 'DELETE' }),
 
+  // ---- proxy routes (shared Traefik ingress) ----
+  listProxyRoutes: () =>
+    request<{
+      routes: {
+        assetId: string;
+        assetName: string;
+        namespace: string;
+        path: string;
+        portSlot: string;
+        stripPrefix: boolean;
+        host: string | null;
+        applied: boolean;
+        url: string;
+      }[];
+      conflicts: { host: string; path: string; assetIds: string[] }[];
+    }>('/api/proxy/routes'),
+  getAssetProxy: (assetId: string) =>
+    request<{
+      assetId: string;
+      proxy: {
+        path: string | null;
+        portSlot: string;
+        stripPrefix: boolean;
+        host: string | null;
+      } | null;
+    }>(`/api/assets/${assetId}/proxy`),
+  setAssetProxy: (
+    assetId: string,
+    body: {
+      path?: string | null;
+      portSlot: string;
+      stripPrefix?: boolean;
+      host?: string | null;
+    },
+  ) =>
+    request<{
+      assetId: string;
+      proxy: {
+        path: string | null;
+        portSlot: string;
+        stripPrefix: boolean;
+        host: string | null;
+      };
+    }>(`/api/assets/${assetId}/proxy`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  removeAssetProxy: (assetId: string) =>
+    request<{ assetId: string; removed: boolean }>(`/api/assets/${assetId}/proxy`, {
+      method: 'DELETE',
+    }),
+
   // ---- meta-assets ----
   listMetaAssets: () => request<MetaAsset[]>('/api/meta-assets'),
   getMetaAsset: (id: string) => request<MetaAsset>(`/api/meta-assets/${id}`),

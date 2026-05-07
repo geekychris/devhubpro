@@ -121,6 +121,36 @@
                 },
                 "additionalProperties": false
               }
+            },
+            "proxy": {
+              "type": "object",
+              "description": "Optional: expose this asset under the shared Traefik Ingress. Pick one of two modes — path-based (mount at /esp under any host) or host-based (claim a hostname like esp.example.com and route the whole hostname to this asset). Set both for host+path routing. The portal generates an Ingress (and a stripPrefix Middleware when path-routing strips the prefix) at k8s apply time, pointing at the Service that owns the named port slot.",
+              "required": ["portSlot"],
+              "anyOf": [
+                { "required": ["path"] },
+                { "required": ["host"] }
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "pattern": "^/[A-Za-z0-9._~/-]*$",
+                  "description": "Mount path under the host. Must start with /. Required when host is omitted; optional (defaults to /) when host is set."
+                },
+                "portSlot": {
+                  "type": "string",
+                  "description": "Name of an entry in runtime.ports[] — the matching Service port becomes the Ingress backend."
+                },
+                "stripPrefix": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Only meaningful in path mode: if true (default) the proxy strips the path prefix before forwarding, so the upstream sees /. Ignored when the effective path is /."
+                },
+                "host": {
+                  "type": "string",
+                  "description": "Hostname to claim, e.g. esp.example.com. Omit to match any host (path-based mode). When set, only requests with this Host: header reach the asset — typical for routing several apps to the same external IP via DNS subdomains."
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

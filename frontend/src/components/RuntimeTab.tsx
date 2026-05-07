@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type DockerContainer } from '../api';
 import { WorkspaceTerminalModal } from './WorkspaceTerminal';
@@ -213,6 +213,9 @@ export function RuntimeTab({ assetId }: { assetId: string }) {
 
       {/* Port forwards */}
       <PortForwardsCard assetId={assetId} />
+
+      {/* Ingress proxy */}
+      <ProxyCard assetId={assetId} />
 
       {/* Endpoints */}
       <EndpointsCard assetId={assetId} />
@@ -844,6 +847,228 @@ function K8sSection({
               Open Grafana →
             </a>
           )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProxyCard({ assetId }: { assetId: string }) {
+  const queryClient = useQueryClient();
+  const proxy = useQuery({
+    queryKey: ['proxy', assetId],
+    queryFn: () => api.getAssetProxy(assetId),
+  });
+  const ports = useQuery({
+    queryKey: ['ports', assetId],
+    queryFn: () => api.listPortsForAsset(assetId),
+  });
+  const current = proxy.data?.proxy ?? null;
+  const slotOptions = Array.from(new Set((ports.data ?? []).map((p) => p.slotName)));
+
+  const [path, setPath] = useState('');
+  const [portSlot, setPortSlot] = useState('http');
+  const [stripPrefix, setStripPrefix] = useState(true);
+  const [host, setHost] = useState('');
+  const [editing, setEditing] = useState(false);
+
+  // Hydrate the form whenever the asset's current proxy changes (initial load + post-mutation).
+  useEffect(() => {
+    if (current) {
+      setPath(current.path ?? '');
+      setPortSlot(current.portSlot);
+      setStripPrefix(current.stripPrefix);
+      setHost(current.host ?? '');
+    } else {
+      setPath(`/${assetId}`);
+      setPortSlot(slotOptions[0] ?? 'http');
+      setStripPrefix(true);
+      setHost('');
+    }
+    setEditing(false);
+  }, [current, assetId, slotOptions.join(',')]);
+
+  const trimmedPath = path.trim();
+  const trimmedHost = host.trim();
+  const previewUrl = trimmedHost
+    ? `http://${trimmedHost}${trimmedPath || '/'}`
+    : trimmedPath
+    ? `http://localhost${trimmedPath}`
+    : '';
+  const canSave = portSlot.trim() && (trimmedPath || trimmedHost);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.setAssetProxy(assetId, {
+        path: trimmedPath || null,
+        portSlot: portSlot.trim(),
+        stripPrefix,
+        host: trimmedHost || null,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['proxy', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['workspace-status', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['proxy-routes'] });
+      queryClient.invalidateQueries({ queryKey: ['endpoints', assetId] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: () => api.removeAssetProxy(assetId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['proxy', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['workspace-status', assetId] });
+      queryClient.invalidateQueries({ queryKey: ['proxy-routes'] });
+      queryClient.invalidateQueries({ queryKey: ['endpoints', assetId] });
+    },
+  });
+
+  const showForm = editing || !current;
+
+  return (
+    <section className="rounded border border-gray-200 bg-white p-4">
+      <header className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-medium text-gray-900">Ingress proxy</h2>
+        <span className="text-xs text-gray-500">
+          {current
+            ? current.host && !current.path
+              ? `host ${current.host}`
+              : current.host
+              ? `${current.host}${current.path}`
+              : `mounted at ${current.path}`
+            : 'not enabled'}
+        </span>
+      </header>
+      <p className="mb-3 text-xs text-gray-500">
+        Expose this asset under the shared Traefik ingress. Pick a <strong>path</strong> (mount at{' '}
+        <code>/{assetId}</code> on any host), a <strong>host</strong> (claim a hostname like{' '}
+        <code>{assetId}.example.com</code> at the root), or both. The change is written to{' '}
+        <code>devportal.yaml</code> in the workspace and surfaces in the <em>Changes</em> tab —
+        review and commit it there to publish.
+      </p>
+
+      {!showForm && current && (
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <span className="rounded bg-green-100 px-2 py-0.5 text-xs text-green-800">enabled</span>
+          <span className="font-mono">
+            {(current.host ?? '') + (current.path ?? '/')}
+          </span>
+          <span className="text-xs text-gray-500">
+            slot <span className="font-mono">{current.portSlot}</span>
+            {current.path && current.path !== '/' ? (
+              <> · strip <span className="font-mono">{current.stripPrefix ? 'yes' : 'no'}</span></>
+            ) : null}
+          </span>
+          <button
+            onClick={() => setEditing(true)}
+            className="ml-auto rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50"
+          >
+            Edit
+          </button>
+          <button
+            onClick={() => remove.mutate()}
+            disabled={remove.isPending}
+            className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+          >
+            {remove.isPending ? 'Removing…' : 'Disable'}
+          </button>
+        </div>
+      )}
+
+      {showForm && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2 text-sm">
+            <label className="flex flex-col text-xs text-gray-600">
+              Path
+              <input
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder={trimmedHost ? '/ (default)' : `/${assetId}`}
+                className="mt-0.5 w-44 rounded border border-gray-300 px-2 py-1 font-mono text-sm"
+              />
+            </label>
+            <label className="flex flex-col text-xs text-gray-600">
+              Port slot
+              {slotOptions.length > 0 ? (
+                <select
+                  value={portSlot}
+                  onChange={(e) => setPortSlot(e.target.value)}
+                  className="mt-0.5 w-32 rounded border border-gray-300 px-2 py-1 font-mono text-sm"
+                >
+                  {slotOptions.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                  {!slotOptions.includes(portSlot) && portSlot && (
+                    <option value={portSlot}>{portSlot}</option>
+                  )}
+                </select>
+              ) : (
+                <input
+                  value={portSlot}
+                  onChange={(e) => setPortSlot(e.target.value)}
+                  placeholder="http"
+                  className="mt-0.5 w-32 rounded border border-gray-300 px-2 py-1 font-mono text-sm"
+                />
+              )}
+            </label>
+            <label className="flex flex-col text-xs text-gray-600">
+              Host (optional)
+              <input
+                value={host}
+                onChange={(e) => setHost(e.target.value)}
+                placeholder="any"
+                className="mt-0.5 w-56 rounded border border-gray-300 px-2 py-1 font-mono text-sm"
+              />
+            </label>
+            <label
+              className={`flex items-center gap-1 text-xs self-end pb-1 ${
+                trimmedPath && trimmedPath !== '/' ? 'text-gray-700' : 'text-gray-400'
+              }`}
+              title={
+                trimmedPath && trimmedPath !== '/'
+                  ? 'Strip the path prefix before forwarding'
+                  : 'Only meaningful when a non-/ path is set'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={stripPrefix}
+                disabled={!trimmedPath || trimmedPath === '/'}
+                onChange={(e) => setStripPrefix(e.target.checked)}
+              />
+              Strip prefix
+            </label>
+          </div>
+          {previewUrl && (
+            <p className="text-xs text-gray-500">
+              URL: <span className="font-mono">{previewUrl}</span>
+              {!trimmedHost && (
+                <> (any host — also reachable as <code>http://&lt;your-ip&gt;{trimmedPath}</code>)</>
+              )}
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => save.mutate()}
+              disabled={save.isPending || !canSave}
+              className="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {save.isPending ? 'Saving…' : current ? 'Save changes' : 'Enable proxy'}
+            </button>
+            {current && (
+              <button
+                onClick={() => setEditing(false)}
+                className="rounded border border-gray-300 px-3 py-1 text-xs hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            )}
+            {save.error && (
+              <span className="text-xs text-red-600">{(save.error as Error).message}</span>
+            )}
+            {remove.error && (
+              <span className="text-xs text-red-600">{(remove.error as Error).message}</span>
+            )}
+          </div>
         </div>
       )}
     </section>

@@ -6,6 +6,7 @@ import { MetaAssetsPage } from './pages/MetaAssetsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { BulkImportPage } from './pages/BulkImportPage';
 import { PortsPage } from './pages/PortsPage';
+import { ProxyRoutesPage } from './pages/ProxyRoutesPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { SearchBar } from './components/SearchBar';
 
@@ -56,6 +57,14 @@ export function App() {
               Ports
             </NavLink>
             <NavLink
+              to="/proxy-routes"
+              className={({ isActive }) =>
+                isActive ? 'text-blue-400 font-medium' : 'text-gray-300 hover:text-white'
+              }
+            >
+              Proxy
+            </NavLink>
+            <NavLink
               to="/register"
               className={({ isActive }) =>
                 isActive ? 'text-blue-400 font-medium' : 'text-gray-300 hover:text-white'
@@ -90,6 +99,7 @@ export function App() {
           <Route path="/assets/:id" element={<AssetDetailPage />} />
           <Route path="/meta-assets" element={<MetaAssetsPage />} />
           <Route path="/ports" element={<PortsPage />} />
+          <Route path="/proxy-routes" element={<ProxyRoutesPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/bulk-import" element={<BulkImportPage />} />
           <Route path="/settings" element={<SettingsPage />} />

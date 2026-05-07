@@ -94,7 +94,8 @@ public record Manifest(
 
     public record Runtime(
         List<Port> ports,
-        List<Env> env
+        List<Env> env,
+        Proxy proxy
     ) {}
 
     public record Port(
@@ -107,6 +108,13 @@ public record Manifest(
         String name,
         @com.fasterxml.jackson.annotation.JsonProperty("default") String defaultValue,
         String description
+    ) {}
+
+    public record Proxy(
+        String path,
+        String portSlot,
+        Boolean stripPrefix,
+        String host
     ) {}
 
     public record DependencyRef(

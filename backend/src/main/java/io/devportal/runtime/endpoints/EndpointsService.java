@@ -6,6 +6,9 @@ import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import io.devportal.asset.Asset;
 import io.devportal.asset.AssetRepository;
 import io.devportal.asset.error.NotFoundException;
+import io.devportal.manifest.Manifest;
+import io.devportal.manifest.ManifestParseResult;
+import io.devportal.manifest.ManifestParser;
 import io.devportal.port.PortRepository;
 import io.devportal.port.PortReservation;
 import io.devportal.workspace.WorkspaceService;
@@ -41,16 +44,19 @@ public class EndpointsService {
     private final PortRepository ports;
     private final WorkspaceService workspace;
     private final io.devportal.runtime.k8s.K8sService k8s;
+    private final ManifestParser manifestParser;
     private final ObjectMapper json = new ObjectMapper();
     private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory());
 
     public EndpointsService(AssetRepository assets, PortRepository ports,
                             WorkspaceService workspace,
-                            io.devportal.runtime.k8s.K8sService k8s) {
+                            io.devportal.runtime.k8s.K8sService k8s,
+                            ManifestParser manifestParser) {
         this.assets = assets;
         this.ports = ports;
         this.workspace = workspace;
         this.k8s = k8s;
+        this.manifestParser = manifestParser;
     }
 
     public AssetEndpoints discover(String assetId) throws IOException, InterruptedException {
@@ -145,7 +151,34 @@ public class EndpointsService {
             }
         }
 
+        // Ingress proxy — generated from spec.runtime.proxy at apply time. Emit a row even when the
+        // ingress hasn't been applied yet so the user can see the path their manifest will claim.
+        Manifest.Proxy proxy = readProxyConfig(assetId);
+        if (proxy != null && proxy.path() != null && !proxy.path().isBlank()) {
+            String host = (proxy.host() != null && !proxy.host().isBlank()) ? proxy.host() : "localhost";
+            String url = "http://" + host + proxy.path();
+            boolean live = k8sPodRunning(assetId);
+            String origin = "spec.runtime.proxy"
+                + (proxy.host() == null || proxy.host().isBlank() ? " (any host — also reachable as router/external IP)" : "");
+            out.add(new AssetEndpoints.Endpoint(
+                "Ingress proxy — " + proxy.path(),
+                url, "ingress-proxy", origin, live, true, null));
+        }
+
         return new AssetEndpoints(assetId, out);
+    }
+
+    private Manifest.Proxy readProxyConfig(String assetId) {
+        try {
+            Path file = workspace.workspaceFor(assetId).resolve("devportal.yaml");
+            if (!Files.exists(file)) return null;
+            ManifestParseResult parsed = manifestParser.parse(Files.readString(file));
+            if (parsed.manifest() == null || parsed.manifest().spec() == null) return null;
+            if (parsed.manifest().spec().runtime() == null) return null;
+            return parsed.manifest().spec().runtime().proxy();
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     /** Inferred role string for an endpoint, e.g. "Web UI", "API", "WebSocket", "metrics". */
