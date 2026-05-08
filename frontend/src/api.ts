@@ -1,3 +1,14 @@
+export type Project = {
+  id: number;
+  parentId: number | null;
+  name: string;
+  description: string | null;
+  metadata: any | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type Asset = {
   id: string;
   name: string;
@@ -803,6 +814,58 @@ export const api = {
     request<GitHubTokenInfo>('/api/settings/github', { method: 'DELETE' }),
   testGitHubToken: () =>
     request<GitHubTokenTestResult>('/api/settings/github/test', { method: 'POST' }),
+
+  // ---- settings: ollama ----
+  getOllamaSettings: () =>
+    request<{ endpoint: string; model: string; source: string }>('/api/settings/ollama'),
+  setOllamaSettings: (body: { endpoint: string; model: string }) =>
+    request<{ endpoint: string; model: string; source: string }>('/api/settings/ollama', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  testOllama: () =>
+    request<{ ok: boolean; endpoint: string; version: string | null; error: string | null }>(
+      '/api/settings/ollama/test', { method: 'POST' }),
+  listOllamaModels: () =>
+    request<{ ok: boolean; models: string[]; error?: string }>('/api/settings/ollama/models'),
+
+  // ---- projects ----
+  listProjects: () => request<Project[]>('/api/projects'),
+  getProject:   (id: number) => request<Project>(`/api/projects/${id}`),
+  projectAssets:(id: number) => request<Asset[]>(`/api/projects/${id}/assets`),
+  createProject:(body: { parentId?: number | null; name: string; description?: string | null; metadata?: any }) =>
+    request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
+  updateProject:(id: number, body: { name?: string; description?: string | null; metadata?: any; sortOrder?: number }) =>
+    request<Project>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  setProjectParent:(id: number, parentId: number | null) =>
+    request<Project>(`/api/projects/${id}/parent`, {
+      method: 'POST', body: JSON.stringify({ parentId }),
+    }),
+  deleteProject:(id: number) => request<void>(`/api/projects/${id}`, { method: 'DELETE' }),
+  addAssetToProject:(projectId: number, assetId: string) =>
+    request<{ projectId: number; assetId: string; added: boolean }>(
+      `/api/projects/${projectId}/assets/${assetId}`, { method: 'POST' }),
+  removeAssetFromProject:(projectId: number, assetId: string) =>
+    request<{ projectId: number; assetId: string; removed: boolean }>(
+      `/api/projects/${projectId}/assets/${assetId}`, { method: 'DELETE' }),
+  moveAssetBetweenProjects:(fromProjectId: number, toProjectId: number, assetId: string, copy = false) =>
+    request<{ from: number; to: number; assetId: string; mode: 'move' | 'copy' }>(
+      `/api/projects/${toProjectId}/assets/${assetId}/move-from/${fromProjectId}${copy ? '?copy=true' : ''}`,
+      { method: 'POST' }),
+  projectMembershipsFor:(assetIds: string[]) =>
+    request<Record<string, number[]>>('/api/projects/memberships', {
+      method: 'POST', body: JSON.stringify({ assetIds }),
+    }),
+
+  // ---- per-asset enrichment (LLM suggestions) ----
+  suggestAssetDescription: (id: string, model?: string) =>
+    request<{ assetId: string; current: string | null; suggested: string; docContext: string }>(
+      `/api/assets/${id}/enrich/description${model ? `?model=${encodeURIComponent(model)}` : ''}`,
+      { method: 'POST' }),
+  suggestAssetTags: (id: string, model?: string) =>
+    request<{ assetId: string; current: string[]; suggested: string[]; docContext: string }>(
+      `/api/assets/${id}/enrich/tags${model ? `?model=${encodeURIComponent(model)}` : ''}`,
+      { method: 'POST' }),
 
   // ---- settings: telegram ----
   getTelegramSettings: () => request<TelegramSettings>('/api/settings/telegram'),

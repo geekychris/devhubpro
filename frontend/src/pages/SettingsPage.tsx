@@ -6,9 +6,137 @@ export function SettingsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold text-gray-900">Settings</h1>
+      <OllamaSection />
       <GitHubSection />
       <TelegramSection />
     </div>
+  );
+}
+
+function OllamaSection() {
+  const qc = useQueryClient();
+  const cfg = useQuery({ queryKey: ['ollama-settings'], queryFn: () => api.getOllamaSettings() });
+  const [endpoint, setEndpoint] = useState('');
+  const [model, setModel] = useState('');
+  const [edited, setEdited] = useState(false);
+
+  // Hydrate inputs once the saved config loads (or after a save).
+  if (cfg.data && !edited) {
+    if (endpoint !== cfg.data.endpoint) setEndpoint(cfg.data.endpoint);
+    if (model    !== cfg.data.model)    setModel(cfg.data.model);
+  }
+
+  const save = useMutation({
+    mutationFn: () => api.setOllamaSettings({ endpoint: endpoint.trim(), model: model.trim() }),
+    onSuccess: () => {
+      setEdited(false);
+      qc.invalidateQueries({ queryKey: ['ollama-settings'] });
+      qc.invalidateQueries({ queryKey: ['ollama-models'] });
+    },
+  });
+  const test = useMutation({ mutationFn: () => api.testOllama() });
+  const models = useQuery({
+    queryKey: ['ollama-models'],
+    queryFn: () => api.listOllamaModels(),
+    refetchOnWindowFocus: false,
+  });
+
+  return (
+    <section className="rounded border border-gray-200 bg-white p-4">
+      <header className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-medium text-gray-900">Ollama (local LLM)</h2>
+        {cfg.data && (
+          <span className="text-[11px] text-gray-500">
+            source: <span className="font-mono">{cfg.data.source.toLowerCase()}</span>
+          </span>
+        )}
+      </header>
+      <p className="mb-3 text-xs text-gray-500">
+        Used to suggest tags and generate descriptions for assets from the docs in their workspace.
+        Defaults to <code>http://localhost:11434</code>; override here if Ollama lives elsewhere.
+      </p>
+
+      <div className="flex flex-wrap items-end gap-2 text-sm">
+        <label className="flex flex-col text-xs text-gray-600">
+          Endpoint
+          <input
+            value={endpoint}
+            onChange={(e) => { setEndpoint(e.target.value); setEdited(true); }}
+            placeholder="http://localhost:11434"
+            className="mt-0.5 w-72 rounded border border-gray-300 px-2 py-1 font-mono text-sm"
+          />
+        </label>
+        <label className="flex flex-col text-xs text-gray-600">
+          Model
+          {models.data?.ok && models.data.models.length > 0 ? (
+            <select
+              value={model}
+              onChange={(e) => { setModel(e.target.value); setEdited(true); }}
+              className="mt-0.5 w-56 rounded border border-gray-300 px-2 py-1 font-mono text-sm"
+            >
+              {!models.data.models.includes(model) && model && (
+                <option value={model}>{model}</option>
+              )}
+              {models.data.models.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={model}
+              onChange={(e) => { setModel(e.target.value); setEdited(true); }}
+              placeholder="llama3.2"
+              className="mt-0.5 w-56 rounded border border-gray-300 px-2 py-1 font-mono text-sm"
+            />
+          )}
+        </label>
+        <button
+          onClick={() => save.mutate()}
+          disabled={save.isPending || !endpoint.trim() || !model.trim()}
+          className="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {save.isPending ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          onClick={() => test.mutate()}
+          disabled={test.isPending}
+          className="rounded border border-gray-300 px-3 py-1 text-xs hover:bg-gray-50 disabled:opacity-50"
+        >
+          {test.isPending ? 'Testing…' : 'Test connection'}
+        </button>
+        <button
+          onClick={() => models.refetch()}
+          className="rounded border border-gray-300 px-3 py-1 text-xs hover:bg-gray-50"
+          title="Reload the list of locally-installed models"
+        >
+          Refresh models
+        </button>
+      </div>
+
+      {save.error && <p className="mt-2 text-xs text-red-600">{(save.error as Error).message}</p>}
+      {test.data && (
+        test.data.ok ? (
+          <p className="mt-2 text-xs text-green-700">
+            ✓ Connected to <span className="font-mono">{test.data.endpoint}</span>
+            {test.data.version && <> (v{test.data.version})</>}
+          </p>
+        ) : (
+          <p className="mt-2 text-xs text-red-600">
+            ✗ {test.data.error ?? 'Connection failed'}
+          </p>
+        )
+      )}
+      {models.data && !models.data.ok && (
+        <p className="mt-2 text-xs text-amber-700">
+          Model list unavailable: {models.data.error}
+        </p>
+      )}
+      {models.data?.ok && (
+        <p className="mt-2 text-[11px] text-gray-500">
+          {models.data.models.length} model{models.data.models.length === 1 ? '' : 's'} installed locally.
+        </p>
+      )}
+    </section>
   );
 }
 
