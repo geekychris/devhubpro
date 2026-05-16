@@ -76,7 +76,8 @@ install_hint() {
     debian:node)    echo "curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs" ;;
     debian:pnpm)    echo "corepack enable" ;;
     debian:docker)  echo "see https://docs.docker.com/engine/install/ubuntu/" ;;
-    debian:kubectl) echo "sudo snap install kubectl --classic  (or see kubernetes.io/docs/tasks/tools/)" ;;
+    debian:kubectl) echo "re-run with DEVPORTAL_AUTO_INSTALL=1, or: curl -LO https://dl.k8s.io/release/\$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl && sudo install -m 755 kubectl /usr/local/bin/" ;;
+    linux:kubectl)  echo "re-run with DEVPORTAL_AUTO_INSTALL=1, or see https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/" ;;
     fedora:git)     echo "sudo dnf install -y git" ;;
     fedora:java)    echo "sudo dnf install -y java-21-openjdk-devel" ;;
     fedora:node)    echo "sudo dnf install -y nodejs npm" ;;
@@ -91,6 +92,23 @@ install_hint() {
     arch:kubectl)   echo "sudo pacman -S --noconfirm kubectl" ;;
     *)              echo "install $1 (no hint for $OS — see your package manager)" ;;
   esac
+}
+
+# Install kubectl from the official upstream binary. Works on every Linux
+# distro and is arch-aware. Falls back to /usr/local/bin so it lands on PATH.
+install_kubectl_binary() {
+  local arch
+  case "$(uname -m)" in
+    x86_64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) die "unsupported arch $(uname -m) for kubectl binary install" ;;
+  esac
+  local ver tmp
+  ver=$(curl -fsSL https://dl.k8s.io/release/stable.txt) || die "could not fetch kubectl stable version"
+  tmp=$(mktemp)
+  curl -fsSL -o "$tmp" "https://dl.k8s.io/release/${ver}/bin/linux/${arch}/kubectl" || die "kubectl download failed"
+  sudo install -m 755 "$tmp" /usr/local/bin/kubectl </dev/tty
+  rm -f "$tmp"
 }
 
 auto_install() {
@@ -108,7 +126,8 @@ auto_install() {
     debian:node)    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - </dev/tty && sudo apt-get install -y nodejs </dev/tty ;;
     debian:pnpm)    corepack enable ;;
     debian:docker)  die "auto-install of docker isn't safe to scriptize — $(install_hint docker)" ;;
-    debian:kubectl) die "auto-install of kubectl on debian varies — $(install_hint kubectl)" ;;
+    debian:kubectl) install_kubectl_binary ;;
+    linux:kubectl)  install_kubectl_binary ;;
     fedora:git)     sudo dnf install -y git </dev/tty ;;
     fedora:java)    sudo dnf install -y java-21-openjdk-devel </dev/tty ;;
     fedora:node)    sudo dnf install -y nodejs npm </dev/tty ;;
