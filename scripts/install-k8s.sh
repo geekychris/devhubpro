@@ -178,13 +178,8 @@ docker info >/dev/null 2>&1 || die "docker daemon is not reachable"
 require java java
 java_major=$(java -version 2>&1 | awk -F'"' '/version/ {print $2}' | awk -F. '{print $1}')
 [ "${java_major:-0}" -ge 21 ] || die "Java 21+ required (have: $java_major) — $(install_hint java)"
-require node node
-node_major=$(node -v | sed 's/^v//' | awk -F. '{print $1}')
-[ "${node_major:-0}" -ge 20 ] || die "Node 20+ required (have: $node_major) — $(install_hint node)"
-if ! command -v pnpm >/dev/null 2>&1; then
-  step "Enabling pnpm via corepack"
-  corepack enable >/dev/null 2>&1 || die "corepack failed — $(install_hint pnpm)"
-fi
+# node + pnpm are NOT host requirements for the k8s installer — the frontend
+# is built entirely inside the node:22-alpine docker container.
 # kubectl may be a shell alias in the user's interactive shell (microk8s.kubectl,
 # minikube kubectl, k3s kubectl) — aliases don't carry into `curl | bash`.
 # Detect the underlying wrapper, define a function so the rest of the script
