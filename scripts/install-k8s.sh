@@ -271,7 +271,9 @@ server {
   }
 }
 NGINX
-docker build --quiet -t "$FRONTEND_IMAGE" "$FE_BUILD" >/dev/null
+# --progress=plain so failures show the actual build log (pnpm errors etc.)
+# instead of BuildKit's terse exit-code summary.
+docker build --progress=plain -t "$FRONTEND_IMAGE" "$FE_BUILD"
 ok "frontend image built"
 
 if [ "$DEVPORTAL_LOAD_KIND" = "1" ]; then
