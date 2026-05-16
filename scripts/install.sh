@@ -40,6 +40,15 @@ ok()   { printf "%s ✓%s %s\n" "$c_green" "$c_reset" "$*"; }
 warn() { printf "%s ! %s%s\n" "$c_yellow" "$c_reset" "$*"; }
 die()  { printf "%s ✗ %s%s\n" "$c_red" "$c_reset" "$*" >&2; exit 1; }
 
+# Non-interactive shells (curl | bash) inherit a minimal PATH and miss
+# directories that login shells get from /etc/profile.d (snap, user-local).
+for _d in /snap/bin /var/lib/snapd/snap/bin /usr/local/bin "$HOME/.local/bin"; do
+  if [ -d "$_d" ]; then
+    case ":$PATH:" in *:"$_d":*) ;; *) PATH="$_d:$PATH" ;; esac
+  fi
+done
+export PATH
+
 # ---- platform detection + install hints ---------------------------------
 case "$(uname -s)" in
   Darwin) OS=mac ;;

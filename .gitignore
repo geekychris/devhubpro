@@ -1,6 +1,10 @@
 # JVM / Gradle
 .gradle/
-build/
+# Gradle output dirs only — anchored so we don't swallow source packages
+# named "build" (e.g. backend/src/main/java/io/devportal/build).
+/build/
+/backend/build/
+/backend/*/build/
 out/
 *.class
 hs_err_pid*
