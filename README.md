@@ -211,6 +211,55 @@ Three sources unified: local docker host ports, Kubernetes NodePorts, and active
 
 ## Quickstart
 
+### One-line install (recommended)
+
+Brew-style installers that fetch the source, build everything, and start the portal. Both are idempotent — re-running pulls the latest `main` and rebuilds in place.
+
+**Direct (docker compose for Postgres, gradle + vite running on the host):**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/geekychris/devhubpro/main/scripts/install.sh | bash
+```
+
+Brings up Postgres in Docker, builds the backend and frontend, starts both in the background (logs under `~/.devportal/logs/`, pid files under `~/.devportal/run/`), and opens http://localhost:5173.
+
+**Kubernetes (everything in-cluster):**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/geekychris/devhubpro/main/scripts/install-k8s.sh | bash
+```
+
+Builds a backend image with Spring Boot buildpacks (no Dockerfile required) and a frontend nginx image, then applies a generated manifest set (Postgres `StatefulSet` + PVC, backend `Deployment`, frontend `Deployment` + `NodePort` Service) to the current `kubectl` context. UI lands on http://localhost:30573.
+
+Both scripts work on **macOS and Linux**, **arm64 and x86_64**. Missing prerequisites (Java 21, Node 20, Docker, kubectl, pnpm) cause a fast fail with a platform-specific install hint (`brew install ...` on macOS; `apt-get` / `dnf` / `pacman` lines on Linux) — nothing destructive happens before the prereq check. Set `DEVPORTAL_AUTO_INSTALL=1` to opt in to the script running those package-manager commands for you (will prompt for `sudo` on Linux; Docker still needs a manual install on macOS because of its GUI).
+
+Both scripts read a handful of env knobs for non-default installs:
+
+| Variable | Default | Both scripts |
+|---|---|---|
+| `DEVPORTAL_SRC` | `~/.devportal/src` | install dir |
+| `DEVPORTAL_REF` | `main` | git ref to check out |
+| `DEVPORTAL_REPO` | `https://github.com/geekychris/devhubpro.git` | git remote |
+| `DEVPORTAL_AUTO_INSTALL` | `0` | `1` to auto-install missing prereqs via the platform package manager |
+
+Kubernetes-only:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DEVPORTAL_NS` | `devportal` | namespace |
+| `DEVPORTAL_TAG` | `dev` | image tag |
+| `DEVPORTAL_NODEPORT` | `30573` | UI nodePort |
+| `DEVPORTAL_LOAD_KIND` | `0` | set to `1` to `kind load` the built images |
+
+Direct-mode only:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DEVPORTAL_START` | `1` | set to `0` to build only, don't launch |
+| `DEVPORTAL_OPEN` | `1` | set to `0` to skip auto-opening the browser |
+
+If you'd rather wire it up by hand, the manual steps follow.
+
 ### Prerequisites
 
 - **Java 21** (Spring Boot 3 will not compile against older JDKs).
