@@ -226,14 +226,14 @@ FE_BUILD=$(mktemp -d)
 trap 'rm -rf "$FE_BUILD"' EXIT
 cp -R "$DEVPORTAL_SRC/frontend/." "$FE_BUILD/"
 cat >"$FE_BUILD/Dockerfile" <<'DOCKERFILE'
-# node:22 — pnpm 11 (corepack default) uses node:sqlite, a Node 22.5+ builtin.
 FROM node:22-alpine AS build
 WORKDIR /app
 RUN corepack enable
+# Pin pnpm@9 — pnpm 11 (corepack default) defaults strict-dep-builds=true,
+# which refuses to run esbuild's postinstall (downloads the native binary),
+# breaking vite build. pnpm 9 doesn't have that friction.
+RUN corepack prepare pnpm@9.15.9 --activate
 COPY package.json pnpm-lock.yaml ./
-# `pnpm install` (not --frozen-lockfile) — installer is used by end users on
-# fresh clones where regenerating the lockfile is fine; --frozen-lockfile is
-# CI-strict and fails the build if package.json drifted.
 RUN pnpm install --no-frozen-lockfile
 COPY . .
 RUN pnpm build
