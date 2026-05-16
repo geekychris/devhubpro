@@ -175,9 +175,31 @@ if ! command -v pnpm >/dev/null 2>&1; then
   step "Enabling pnpm via corepack"
   corepack enable >/dev/null 2>&1 || die "corepack failed — $(install_hint pnpm)"
 fi
+# kubectl may be a shell alias in the user's interactive shell (microk8s.kubectl,
+# minikube kubectl, k3s kubectl) — aliases don't carry into `curl | bash`.
+# Detect the underlying wrapper, define a function so the rest of the script
+# can call `kubectl` normally, and remember the flavor so we can do flavor-
+# specific image loading later (microk8s/k3s have their own containerd, not
+# the docker daemon).
+KUBE_FLAVOR=stock
+if ! command -v kubectl >/dev/null 2>&1; then
+  if command -v microk8s.kubectl >/dev/null 2>&1; then
+    kubectl() { command microk8s.kubectl "$@"; }; export -f kubectl
+    KUBE_FLAVOR=microk8s
+    ok "using microk8s.kubectl as kubectl"
+  elif command -v k3s >/dev/null 2>&1 && k3s kubectl version --client >/dev/null 2>&1; then
+    kubectl() { command k3s kubectl "$@"; }; export -f kubectl
+    KUBE_FLAVOR=k3s
+    ok "using 'k3s kubectl' as kubectl"
+  elif command -v minikube >/dev/null 2>&1 && minikube kubectl -- version --client >/dev/null 2>&1; then
+    kubectl() { command minikube kubectl -- "$@"; }; export -f kubectl
+    KUBE_FLAVOR=minikube
+    ok "using 'minikube kubectl' as kubectl"
+  fi
+fi
 require kubectl kubectl
-kubectl cluster-info >/dev/null 2>&1 || die "kubectl cannot reach a cluster — start one (Rancher Desktop / kind / minikube)"
-ok "prereqs ok — context: $(kubectl config current-context)"
+kubectl cluster-info >/dev/null 2>&1 || die "kubectl cannot reach a cluster — start one (Rancher Desktop / kind / minikube / microk8s)"
+ok "prereqs ok — context: $(kubectl config current-context 2>/dev/null || echo "($KUBE_FLAVOR)")"
 
 step "Fetching source -> $DEVPORTAL_SRC ($DEVPORTAL_REF)"
 if [ -d "$DEVPORTAL_SRC/.git" ]; then
@@ -243,6 +265,21 @@ if [ "$DEVPORTAL_LOAD_KIND" = "1" ]; then
   step "Loading images into kind"
   kind load docker-image "$BACKEND_IMAGE" "$FRONTEND_IMAGE"
 fi
+
+# microk8s and k3s ship their own containerd — images built against the
+# docker daemon aren't visible to them. Pipe through ctr image import so the
+# Deployment doesn't ErrImagePull. Costs a few seconds; skip if not needed.
+load_into_containerd() {
+  local importer="$1"
+  for img in "$BACKEND_IMAGE" "$FRONTEND_IMAGE"; do
+    step "Importing $img into $KUBE_FLAVOR containerd"
+    docker save "$img" | $importer
+  done
+}
+case "$KUBE_FLAVOR" in
+  microk8s) load_into_containerd "sudo microk8s ctr image import -" ;;
+  k3s)      load_into_containerd "sudo k3s ctr images import -" ;;
+esac
 
 step "Applying manifests to namespace '$DEVPORTAL_NS'"
 kubectl create namespace "$DEVPORTAL_NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
