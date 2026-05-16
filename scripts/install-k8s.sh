@@ -235,7 +235,10 @@ FROM node:20-alpine AS build
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+# `pnpm install` (not --frozen-lockfile) — installer is used by end users on
+# fresh clones where regenerating the lockfile is fine; --frozen-lockfile is
+# CI-strict and fails the build if package.json drifted.
+RUN pnpm install --no-frozen-lockfile
 COPY . .
 RUN pnpm build
 
