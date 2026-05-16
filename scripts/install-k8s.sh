@@ -279,9 +279,20 @@ fi
 
 # microk8s and k3s ship their own containerd — images built against the
 # docker daemon aren't visible to them. Pipe through ctr image import so the
-# Deployment doesn't ErrImagePull. Costs a few seconds; skip if not needed.
+# Deployment doesn't ErrImagePull.
+#
+# `docker save | sudo ctr import -` claims sudo's stdin, leaving no fd for
+# the password prompt. Pre-authenticate with `sudo -v </dev/tty` so the
+# cached creds (default 5 min) carry through subsequent piped sudo calls.
 load_into_containerd() {
   local importer="$1"
+  if [ "$KUBE_FLAVOR" = "microk8s" ] || [ "$KUBE_FLAVOR" = "k3s" ]; then
+    if ! sudo -n true 2>/dev/null; then
+      step "$KUBE_FLAVOR containerd import needs sudo — authenticating"
+      sudo -v -p "[sudo] password for $USER (containerd import): " </dev/tty \
+        || die "sudo authentication failed — re-run after: sudo -v"
+    fi
+  fi
   for img in "$BACKEND_IMAGE" "$FRONTEND_IMAGE"; do
     step "Importing $img into $KUBE_FLAVOR containerd"
     docker save "$img" | $importer
