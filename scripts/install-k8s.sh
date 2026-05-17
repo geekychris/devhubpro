@@ -288,7 +288,11 @@ RUN set -eux; \
 # JVMs (mvn, gradle) are not — and they consult passwd's root home for
 # their .m2/.gradle locations. usermod fixes passwd so every JVM agrees
 # on the PVC location without needing per-invocation -D flags.
-RUN usermod -d /var/devportal/home root
+# `usermod -d` refuses because root is "currently used by process 1" during
+# the docker build. sed-patching /etc/passwd directly bypasses that check
+# and produces the same end state.
+RUN sed -i 's|^root:x:0:0:root:/root:|root:x:0:0:root:/var/devportal/home:|' /etc/passwd \
+    && grep '^root:' /etc/passwd
 ENV HOME=/var/devportal/home
 
 COPY --from=build /src/backend/build/libs/*.jar /app/devportal.jar
