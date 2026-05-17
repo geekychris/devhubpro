@@ -243,8 +243,12 @@ RUN ./gradlew --no-daemon --quiet -x test bootJar && ls -la build/libs/
 # assets from source. ~170MB larger but required for compile-from-source.
 FROM eclipse-temurin:21-jdk-jammy
 ENV DEBIAN_FRONTEND=noninteractive
+# python3 included so asset hook scripts that shell out to python (very common
+# pattern for "parse JSON inline" helpers) work out of the box. Without it,
+# `python3 ... 2>/dev/null || echo ""` patterns silently produce empty strings
+# and downstream verification logic falls into surprising fallback paths.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash git curl ca-certificates maven jq \
+      bash git curl ca-certificates maven jq python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # kubectl + docker CLI, arch-aware (amd64 / arm64).
