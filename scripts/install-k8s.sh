@@ -266,12 +266,16 @@ RUN set -eux; \
 # Put HOME on the PVC so SecretService's $HOME/.devportal/secrets survives
 # pod restarts. Without this, the GitHub PAT (and SSH keys, telegram tokens)
 # would live in the pod's writable layer and disappear on every rollout.
+#
+# Java's System.getProperty("user.home") reads from /etc/passwd (=/root for
+# the root user), NOT from $HOME — so the JVM arg below is required for
+# SecretService (which uses user.home) to honour the PVC mount.
 ENV HOME=/var/devportal/home
 
 COPY --from=build /src/backend/build/libs/*.jar /app/devportal.jar
 WORKDIR /app
 EXPOSE 8081
-ENTRYPOINT ["java","-jar","/app/devportal.jar"]
+ENTRYPOINT ["java","-Duser.home=/var/devportal/home","-jar","/app/devportal.jar"]
 DOCKERFILE
 
 # Patterns ANCHORED to the gradle output dirs — `**/build` and `--exclude=build`
