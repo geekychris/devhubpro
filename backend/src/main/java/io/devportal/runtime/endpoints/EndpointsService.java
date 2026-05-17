@@ -355,15 +355,6 @@ public class EndpointsService {
         } catch (Exception e) { return null; }
     }
 
-    private String firstRunningPodName(String assetId) {
-        try {
-            ProcResult r = exec("kubectl", "get", "pods", "-A", "-l", "app=" + assetId,
-                "-o", "jsonpath={.items[?(@.status.phase=='Running')].metadata.name}");
-            String s = r.output.trim();
-            if (s.isEmpty()) return null;
-            return s.split("\\s+")[0];
-        } catch (Exception e) { return null; }
-    }
 
     private void addSpringPaths(List<AssetEndpoints.Endpoint> out, String prefix, String base,
                                 boolean live, String origin, boolean hostAccessible,
@@ -389,32 +380,15 @@ public class EndpointsService {
     }
 
     private boolean k8sPodRunning(String assetId) {
+        // Multi-component assets don't share a single app=<assetId> label across their workloads.
+        // Treat the asset as live when any pod in its namespace is Running.
         try {
-            ProcResult r = exec("kubectl", "get", "pods", "-A", "-l", "app=" + assetId,
+            String ns = k8sNamespace(assetId);
+            ProcResult r = exec("kubectl", "get", "pods", "-n", ns,
                 "-o", "jsonpath={.items[?(@.status.phase=='Running')].metadata.name}");
             return r.exitCode == 0 && !r.output.trim().isEmpty();
         } catch (Exception e) {
             return false;
-        }
-    }
-
-    private record ClusterIp(String name, String ip, int port) {}
-
-    private ClusterIp clusterServiceIp(String assetId) {
-        try {
-            ProcResult r = exec("kubectl", "get", "service", "-A", "-l", "app=" + assetId, "-o", "json");
-            if (r.exitCode != 0) return null;
-            JsonNode root = json.readTree(r.output);
-            JsonNode items = root.path("items");
-            if (!items.isArray() || items.isEmpty()) return null;
-            JsonNode svc = items.get(0);
-            String name = svc.path("metadata").path("name").asText();
-            String ip = svc.path("spec").path("clusterIP").asText(null);
-            int port = svc.path("spec").path("ports").path(0).path("port").asInt(80);
-            if (ip == null || ip.isEmpty() || "None".equals(ip)) return null;
-            return new ClusterIp(name, ip, port);
-        } catch (Exception e) {
-            return null;
         }
     }
 

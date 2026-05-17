@@ -468,13 +468,14 @@ public class K8sService {
     public K8sStatus status(String assetId) throws IOException, InterruptedException {
         if (!assets.existsById(assetId)) throw new NotFoundException("Asset '" + assetId + "' not found");
         String ns = effectiveNamespace(assetId);
-        String selector = "app=" + assetId;
 
+        // Multi-component assets don't share a single app=<assetId> label across their workloads,
+        // so list everything in the asset's namespace and rely on the namespace boundary.
         ProcResult pods = exec(new String[]{
-            "kubectl", "get", "pods", "-n", ns, "-l", selector, "-o", "json"
+            "kubectl", "get", "pods", "-n", ns, "-o", "json"
         });
         ProcResult svcs = exec(new String[]{
-            "kubectl", "get", "services", "-n", ns, "-l", selector, "-o", "json"
+            "kubectl", "get", "services", "-n", ns, "-o", "json"
         });
 
         List<K8sStatus.Pod> podList = new ArrayList<>();
@@ -512,8 +513,8 @@ public class K8sService {
     public MonitoringLinks links(String assetId) {
         if (!assets.existsById(assetId)) throw new NotFoundException("Asset '" + assetId + "' not found");
         String ns = effectiveNamespace(assetId);
-        String k9s = "k9s --namespace " + ns + " --command pods --selector app=" + assetId;
-        String kubectlLogs = "kubectl logs -n " + ns + " -l app=" + assetId + " --tail=200 -f";
+        String k9s = "k9s --namespace " + ns + " --command pods";
+        String kubectlLogs = "kubectl logs -n " + ns + " -l app --all-containers=true --tail=200 -f";
         String grafana = props.monitoringBaseUrl() == null || props.monitoringBaseUrl().isBlank()
             ? null : props.monitoringBaseUrl() + assetId;
         return new MonitoringLinks(k9s, grafana, kubectlLogs);

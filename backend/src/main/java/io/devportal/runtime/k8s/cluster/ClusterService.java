@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.devportal.asset.AssetRepository;
 import io.devportal.asset.error.NotFoundException;
+import io.devportal.runtime.k8s.K8sService;
 import io.devportal.runtime.k8s.cluster.dto.PodDetail;
 import io.devportal.runtime.k8s.cluster.dto.PodEvent;
 import java.io.BufferedReader;
@@ -25,15 +26,21 @@ public class ClusterService {
     private static final Logger log = LoggerFactory.getLogger(ClusterService.class);
 
     private final AssetRepository assets;
+    private final K8sService k8s;
     private final ObjectMapper json = new ObjectMapper();
 
-    public ClusterService(AssetRepository assets) {
+    public ClusterService(AssetRepository assets, K8sService k8s) {
         this.assets = assets;
+        this.k8s = k8s;
     }
 
     public List<PodDetail> listPods(String assetId) throws IOException, InterruptedException {
         if (!assets.existsById(assetId)) throw new NotFoundException("Asset '" + assetId + "' not found");
-        ProcResult r = exec("kubectl", "get", "pods", "-A", "-l", "app=" + assetId, "-o", "json");
+        // Multi-component assets label their pods by service name (e.g. app=social-app), not by
+        // assetId, so an app=<assetId> selector returns zero pods. List everything in the asset's
+        // effective namespace instead — that is the unit of association we already track.
+        String ns = k8s.effectiveNamespace(assetId);
+        ProcResult r = exec("kubectl", "get", "pods", "-n", ns, "-o", "json");
         if (r.exitCode != 0) {
             throw new IOException("kubectl get pods failed: " + r.output);
         }
