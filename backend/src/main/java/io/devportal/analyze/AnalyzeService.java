@@ -59,7 +59,7 @@ public class AnalyzeService {
         }
         if (!maven.hasPom(ws)) {
             return new AnalyzeReport(assetId, "maven", false, List.of(), List.of(),
-                List.of("No pom.xml at workspace root — Maven analyzer skipped"));
+                List.of("No pom.xml at workspace root or a single direct subdir — Maven analyzer skipped"));
         }
 
         MavenAnalysis result = maven.analyze(ws);
