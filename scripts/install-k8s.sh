@@ -52,9 +52,17 @@ warn() { printf "%s ! %s%s\n" "$c_yellow" "$c_reset" "$*"; }
 die()  { printf "%s ✗ %s%s\n" "$c_red" "$c_reset" "$*" >&2; exit 1; }
 
 # Non-interactive shells (curl | bash) inherit a minimal PATH and miss
-# directories that login shells get from /etc/profile.d (snap, user-local).
-# Surface them so wrappers like microk8s.kubectl in /snap/bin become visible.
-for _d in /snap/bin /var/lib/snapd/snap/bin /usr/local/bin "$HOME/.local/bin"; do
+# directories that login shells get from /etc/profile.d (snap, user-local) or
+# from app-installer shims (Rancher Desktop, Docker Desktop on macOS, Homebrew
+# on Apple Silicon). Surface them so wrappers like microk8s.kubectl in /snap/bin
+# or ~/.rd/bin/{docker,kubectl} become visible.
+for _d in \
+    /snap/bin /var/lib/snapd/snap/bin \
+    /usr/local/bin /opt/homebrew/bin \
+    "$HOME/.rd/bin" \
+    /Applications/Rancher\ Desktop.app/Contents/Resources/resources/darwin/bin \
+    /Applications/Docker.app/Contents/Resources/bin \
+    "$HOME/.local/bin"; do
   if [ -d "$_d" ]; then
     case ":$PATH:" in *:"$_d":*) ;; *) PATH="$_d:$PATH" ;; esac
   fi
@@ -179,11 +187,9 @@ step "Checking prerequisites ($OS)"
 require git git
 require docker docker
 docker info >/dev/null 2>&1 || die "docker daemon is not reachable"
-require java java
-java_major=$(java -version 2>&1 | awk -F'"' '/version/ {print $2}' | awk -F. '{print $1}')
-[ "${java_major:-0}" -ge 21 ] || die "Java 21+ required (have: $java_major) — $(install_hint java)"
-# node + pnpm are NOT host requirements for the k8s installer — the frontend
-# is built entirely inside the node:22-alpine docker container.
+# Java + mvn + node + pnpm are NOT host requirements for the k8s installer —
+# the backend builds inside eclipse-temurin:21-jdk-jammy and the frontend
+# inside node:22-alpine. Host only needs git + docker + kubectl + a cluster.
 # kubectl may be a shell alias in the user's interactive shell (microk8s.kubectl,
 # minikube kubectl, k3s kubectl) — aliases don't carry into `curl | bash`.
 # Detect the underlying wrapper, define a function so the rest of the script
