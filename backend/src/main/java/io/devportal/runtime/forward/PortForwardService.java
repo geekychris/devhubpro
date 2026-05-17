@@ -30,7 +30,7 @@ import org.springframework.stereotype.Service;
  * the configured local pool unless explicitly requested.
  */
 @Service
-@EnableConfigurationProperties(PortProperties.class)
+@EnableConfigurationProperties({PortProperties.class, io.devportal.runtime.UrlsProperties.class})
 public class PortForwardService {
 
     private static final Logger log = LoggerFactory.getLogger(PortForwardService.class);
@@ -39,16 +39,19 @@ public class PortForwardService {
     private final ClusterService cluster;
     private final PortRepository ports;
     private final PortProperties portProps;
+    private final io.devportal.runtime.UrlsProperties urls;
 
     private final Map<Long, Session> sessions = new ConcurrentHashMap<>();
     private final AtomicLong nextId = new AtomicLong(1);
 
     public PortForwardService(AssetRepository assets, ClusterService cluster,
-                              PortRepository ports, PortProperties portProps) {
+                              PortRepository ports, PortProperties portProps,
+                              io.devportal.runtime.UrlsProperties urls) {
         this.assets = assets;
         this.cluster = cluster;
         this.ports = ports;
         this.portProps = portProps;
+        this.urls = urls;
     }
 
     public List<PortForwardSession> listForAsset(String assetId) {
@@ -93,7 +96,7 @@ public class PortForwardService {
 
         PortForwardSession session = new PortForwardSession(
             id, assetId, namespace, podName, containerPort, hostPort,
-            "running", null, Instant.now());
+            "running", null, Instant.now(), urls.host());
         Session s = new Session(session, p);
         sessions.put(id, s);
 
@@ -116,7 +119,8 @@ public class PortForwardService {
                     new PortForwardSession(
                         existing.session.id(), existing.session.assetId(), existing.session.namespace(),
                         existing.session.podName(), existing.session.containerPort(),
-                        existing.session.hostPort(), status, error, existing.session.startedAt()),
+                        existing.session.hostPort(), status, error, existing.session.startedAt(),
+                        existing.session.host()),
                     existing.process));
             }
             log.info("port-forward {} exited (code={})", id, exit);

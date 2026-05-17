@@ -11,7 +11,8 @@ public record PortForwardSession(
     int hostPort,
     String status,           // "running" | "stopped" | "failed"
     String error,            // null on success
-    Instant startedAt
+    Instant startedAt,
+    String host              // honours devportal.urls.host; "localhost" in direct-mode
 ) {
-    public String url() { return "http://localhost:" + hostPort + "/"; }
+    public String url() { return "http://" + host + ":" + hostPort + "/"; }
 }

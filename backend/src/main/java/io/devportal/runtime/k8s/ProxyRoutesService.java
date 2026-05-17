@@ -32,6 +32,8 @@ import org.springframework.stereotype.Service;
  * {@code devportal.io/managed=true}.
  */
 @Service
+@org.springframework.boot.context.properties.EnableConfigurationProperties(
+    io.devportal.runtime.UrlsProperties.class)
 public class ProxyRoutesService {
 
     private static final Logger log = LoggerFactory.getLogger(ProxyRoutesService.class);
@@ -40,14 +42,17 @@ public class ProxyRoutesService {
     private final WorkspaceService workspace;
     private final ManifestParser manifestParser;
     private final K8sService k8s;
+    private final io.devportal.runtime.UrlsProperties urls;
     private final ObjectMapper json = new ObjectMapper();
 
     public ProxyRoutesService(AssetRepository assets, WorkspaceService workspace,
-                              ManifestParser manifestParser, K8sService k8s) {
+                              ManifestParser manifestParser, K8sService k8s,
+                              io.devportal.runtime.UrlsProperties urls) {
         this.assets = assets;
         this.workspace = workspace;
         this.manifestParser = manifestParser;
         this.k8s = k8s;
+        this.urls = urls;
     }
 
     public record Route(
@@ -85,7 +90,7 @@ public class ProxyRoutesService {
             boolean stripPrefix = (p.stripPrefix() == null || p.stripPrefix()) && !"/".equals(effectivePath);
             String ns;
             try { ns = k8s.effectiveNamespace(a.id()); } catch (Exception e) { ns = a.id(); }
-            String urlHost = hasHost ? p.host() : "localhost";
+            String urlHost = hasHost ? p.host() : urls.host();
             routes.add(new Route(
                 a.id(), a.name(), ns,
                 effectivePath, p.portSlot(), stripPrefix, p.host(),

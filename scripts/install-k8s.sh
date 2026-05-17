@@ -22,6 +22,9 @@
 #   DEVPORTAL_NS         k8s namespace (default: devportal)
 #   DEVPORTAL_TAG        image tag (default: dev)
 #   DEVPORTAL_NODEPORT   nodePort for the UI (default: 30573)
+#   DEVPORTAL_URLS_HOST   host part of URLs the portal shows back to users
+#                         (default: localhost; set to spark.local etc. when the
+#                         portal is on a server and the browser is on your laptop)
 #   DEVPORTAL_LOAD_KIND   if "1", run `kind load docker-image` (kind clusters)
 #   DEVPORTAL_AUTO_INSTALL "1" to brew/apt/dnf install missing deps (default: 0)
 
@@ -33,6 +36,7 @@ DEVPORTAL_REPO="${DEVPORTAL_REPO:-https://github.com/geekychris/devhubpro.git}"
 DEVPORTAL_NS="${DEVPORTAL_NS:-devportal}"
 DEVPORTAL_TAG="${DEVPORTAL_TAG:-dev}"
 DEVPORTAL_NODEPORT="${DEVPORTAL_NODEPORT:-30573}"
+DEVPORTAL_URLS_HOST="${DEVPORTAL_URLS_HOST:-localhost}"
 DEVPORTAL_LOAD_KIND="${DEVPORTAL_LOAD_KIND:-0}"
 DEVPORTAL_AUTO_INSTALL="${DEVPORTAL_AUTO_INSTALL:-0}"
 
@@ -529,6 +533,8 @@ spec:
               value: devportal
             - name: DEVPORTAL_WORKSPACE_DIR
               value: /var/devportal/workspace
+            - name: DEVPORTAL_URLS_HOST
+              value: ${DEVPORTAL_URLS_HOST}
             # HOME is set on the image to /var/devportal/home so secrets
             # (github-token, ssh keys) live on the PVC and survive rollouts.
           ports:

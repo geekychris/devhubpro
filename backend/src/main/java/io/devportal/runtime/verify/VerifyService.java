@@ -31,6 +31,8 @@ import org.springframework.stereotype.Service;
  * is left as a stub for now (kubectl readiness checks).
  */
 @Service
+@org.springframework.boot.context.properties.EnableConfigurationProperties(
+    io.devportal.runtime.UrlsProperties.class)
 public class VerifyService {
 
     private static final Logger log = LoggerFactory.getLogger(VerifyService.class);
@@ -38,11 +40,14 @@ public class VerifyService {
     private final AssetRepository assets;
     private final DockerService docker;
     private final PortRepository ports;
+    private final io.devportal.runtime.UrlsProperties urls;
 
-    public VerifyService(AssetRepository assets, DockerService docker, PortRepository ports) {
+    public VerifyService(AssetRepository assets, DockerService docker, PortRepository ports,
+                         io.devportal.runtime.UrlsProperties urls) {
         this.assets = assets;
         this.docker = docker;
         this.ports = ports;
+        this.urls = urls;
     }
 
     public VerifyResult verify(String assetId, String stage) {
@@ -116,10 +121,11 @@ public class VerifyService {
             return new VerifyResult(asset.id(), "docker", false, "probe", steps,
                 "no 'http' slot to probe");
         }
-        boolean reachable = pollHttp("http://localhost:" + httpPort + "/");
+        String probeUrl = "http://" + urls.host() + ":" + httpPort + "/";
+        boolean reachable = pollHttp(probeUrl);
         steps.add(new VerifyResult.Step("probe", reachable,
             System.currentTimeMillis() - t2,
-            "GET http://localhost:" + httpPort + "/ → " + (reachable ? "reachable" : "no response in 30s")));
+            "GET " + probeUrl + " → " + (reachable ? "reachable" : "no response in 30s")));
 
         cleanup(asset.id());
 

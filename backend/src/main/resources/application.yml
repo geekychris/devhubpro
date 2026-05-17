@@ -32,6 +32,12 @@ management:
 devportal:
   github:
     token: ${GITHUB_TOKEN:}
+  urls:
+    # Host part of URLs the portal surfaces back to users (endpoint discovery,
+    # port-forward sessions, verify probes). Defaults to localhost which works
+    # for direct-mode installs. For k8s-mode installs accessed from a different
+    # machine, set DEVPORTAL_URLS_HOST=spark.local (or your server's name).
+    host: ${DEVPORTAL_URLS_HOST:localhost}
   workspace:
     dir: ${DEVPORTAL_WORKSPACE_DIR:${user.home}/.devportal/workspace}
   state:

@@ -36,6 +36,8 @@ import org.springframework.stereotype.Service;
  * or pod, no otherwise.
  */
 @Service
+@org.springframework.boot.context.properties.EnableConfigurationProperties(
+    io.devportal.runtime.UrlsProperties.class)
 public class EndpointsService {
 
     private static final Logger log = LoggerFactory.getLogger(EndpointsService.class);
@@ -45,18 +47,21 @@ public class EndpointsService {
     private final WorkspaceService workspace;
     private final io.devportal.runtime.k8s.K8sService k8s;
     private final ManifestParser manifestParser;
+    private final io.devportal.runtime.UrlsProperties urls;
     private final ObjectMapper json = new ObjectMapper();
     private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory());
 
     public EndpointsService(AssetRepository assets, PortRepository ports,
                             WorkspaceService workspace,
                             io.devportal.runtime.k8s.K8sService k8s,
-                            ManifestParser manifestParser) {
+                            ManifestParser manifestParser,
+                            io.devportal.runtime.UrlsProperties urls) {
         this.assets = assets;
         this.ports = ports;
         this.workspace = workspace;
         this.k8s = k8s;
         this.manifestParser = manifestParser;
+        this.urls = urls;
     }
 
     public AssetEndpoints discover(String assetId) throws IOException, InterruptedException {
@@ -69,14 +74,14 @@ public class EndpointsService {
 
         // Local docker ports — host accessible
         for (PortReservation r : ports.findByAssetAndScope(assetId, "local")) {
-            String url = "http://localhost:" + r.port() + "/";
+            String url = "http://" + urls.host() + ":" + r.port() + "/";
             out.add(new AssetEndpoints.Endpoint(
                 "Local docker — " + r.slotName(),
                 url, "local-docker",
                 "port registry slot " + r.slotName() + " (host=" + r.port() + ")",
                 hasLocalContainer, true, null));
             if ("http".equals(r.slotName())) {
-                addSpringPaths(out, "Local docker — ", "http://localhost:" + r.port(),
+                addSpringPaths(out, "Local docker — ", "http://" + urls.host() + ":" + r.port(),
                     hasLocalContainer, "port registry", true, null);
             }
         }
@@ -92,14 +97,14 @@ public class EndpointsService {
                     + (role != null ? " (" + role + ")" : "");
                 if ("NodePort".equalsIgnoreCase(svc.type) || "LoadBalancer".equalsIgnoreCase(svc.type)) {
                     if (sp.nodePort != null) {
-                        String url = "http://localhost:" + sp.nodePort + "/";
+                        String url = "http://" + urls.host() + ":" + sp.nodePort + "/";
                         out.add(new AssetEndpoints.Endpoint(
                             label, url, "k8s-nodeport",
                             "Service " + svc.name + " " + svc.type + " :" + sp.nodePort,
                             svc.hasReadyEndpoint, true, null));
                         // Layer Spring's conventional paths only on Services that look like Spring Boot.
                         if (looksLikeSpring(role, svc.imageHints)) {
-                            addSpringPaths(out, svc.name + " — ", "http://localhost:" + sp.nodePort,
+                            addSpringPaths(out, svc.name + " — ", "http://" + urls.host() + ":" + sp.nodePort,
                                 svc.hasReadyEndpoint, "NodePort " + sp.nodePort, true, null);
                         }
                     }
@@ -136,7 +141,7 @@ public class EndpointsService {
             for (PortReservation r : ports.findByAssetAndScope(d.producerId(), "local")) {
                 out.add(new AssetEndpoints.Endpoint(
                     "Dependent " + d.producerId() + " — " + r.slotName(),
-                    "http://localhost:" + r.port() + "/",
+                    "http://" + urls.host() + ":" + r.port() + "/",
                     "dependent-local",
                     "runtime edge -> " + d.producerId() + " (port registry local)",
                     dockerContainerRunning(d.producerId()), true, null));
@@ -144,7 +149,7 @@ public class EndpointsService {
             for (PortReservation r : ports.findByAssetAndScope(d.producerId(), "k8s-nodeport")) {
                 out.add(new AssetEndpoints.Endpoint(
                     "Dependent " + d.producerId() + " — " + r.slotName() + " (NodePort)",
-                    "http://localhost:" + r.port() + "/",
+                    "http://" + urls.host() + ":" + r.port() + "/",
                     "dependent-k8s-nodeport",
                     "runtime edge -> " + d.producerId() + " (NodePort " + r.port() + ")",
                     k8sPodRunning(d.producerId()), true, null));
@@ -155,7 +160,7 @@ public class EndpointsService {
         // ingress hasn't been applied yet so the user can see the path their manifest will claim.
         Manifest.Proxy proxy = readProxyConfig(assetId);
         if (proxy != null && proxy.path() != null && !proxy.path().isBlank()) {
-            String host = (proxy.host() != null && !proxy.host().isBlank()) ? proxy.host() : "localhost";
+            String host = (proxy.host() != null && !proxy.host().isBlank()) ? proxy.host() : urls.host();
             String url = "http://" + host + proxy.path();
             boolean live = k8sPodRunning(assetId);
             String origin = "spec.runtime.proxy"
