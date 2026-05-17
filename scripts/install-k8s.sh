@@ -303,6 +303,23 @@ case "$KUBE_FLAVOR" in
   k3s)      load_into_containerd "sudo k3s ctr images import -" ;;
 esac
 
+# Ensure a default StorageClass exists — without one PVCs stay Pending.
+# microk8s ships hostpath-storage disabled; k3s ships local-path enabled.
+if ! kubectl get storageclass 2>/dev/null | grep -q '(default)'; then
+  if [ "$KUBE_FLAVOR" = "microk8s" ]; then
+    step "Enabling microk8s hostpath-storage addon (no default StorageClass)"
+    sudo microk8s enable hostpath-storage >/dev/null 2>&1 \
+      || warn "could not enable hostpath-storage automatically — run: sudo microk8s enable hostpath-storage"
+    # Wait briefly for the StorageClass to register
+    for i in $(seq 1 20); do
+      kubectl get storageclass 2>/dev/null | grep -q '(default)' && break
+      sleep 1
+    done
+  else
+    warn "no default StorageClass found — PVCs will stay Pending until one exists"
+  fi
+fi
+
 step "Applying manifests to namespace '$DEVPORTAL_NS'"
 kubectl create namespace "$DEVPORTAL_NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
