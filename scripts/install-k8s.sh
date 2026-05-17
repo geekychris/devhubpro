@@ -238,8 +238,10 @@ COPY schema/ ./schema/
 WORKDIR /src/backend
 RUN ./gradlew --no-daemon --quiet -x test bootJar && ls -la build/libs/
 
-# --- 2. runtime: JRE + the toolbox the portal shells out to ---
-FROM eclipse-temurin:21-jre-jammy
+# --- 2. runtime: JDK (not JRE) + the toolbox the portal shells out to ---
+# JDK rather than JRE so the in-pod mvn can find javac when building managed
+# assets from source. ~170MB larger but required for compile-from-source.
+FROM eclipse-temurin:21-jdk-jammy
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash git curl ca-certificates maven jq \
