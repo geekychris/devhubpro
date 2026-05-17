@@ -335,9 +335,10 @@ public class BuildService {
      * goals are mapped; arbitrary names still fail so users don't accidentally trigger something
      * unexpected.
      */
-    private java.util.Optional<String> defaultCommand(Path workspace, String commandName) {
-        // Maven
-        if (Files.exists(workspace.resolve("pom.xml"))) {
+    static java.util.Optional<String> defaultCommand(Path workspace, String commandName) {
+        // Maven — accept pom.xml at root OR exactly one level deep (polyglot monorepos).
+        Path mvnRoot = locateBuildRoot(workspace, "pom.xml");
+        if (mvnRoot != null) {
             String goal = switch (commandName.toLowerCase()) {
                 case "build", "package" -> "package";
                 case "compile" -> "compile";
@@ -347,13 +348,12 @@ public class BuildService {
                 case "clean"   -> "clean";
                 default -> null;
             };
-            if (goal != null) return java.util.Optional.of("mvn -DskipTests " + goal);
+            if (goal != null) return java.util.Optional.of(withCd(workspace, mvnRoot, "mvn -DskipTests " + goal));
         }
         // Gradle
-        boolean gradleKts = Files.exists(workspace.resolve("build.gradle.kts"));
-        boolean gradle = Files.exists(workspace.resolve("build.gradle"));
-        if (gradleKts || gradle) {
-            boolean wrapper = Files.exists(workspace.resolve("gradlew"));
+        Path gradleRoot = locateGradleRoot(workspace);
+        if (gradleRoot != null) {
+            boolean wrapper = Files.exists(gradleRoot.resolve("gradlew"));
             String exe = wrapper ? "./gradlew" : "gradle";
             String task = switch (commandName.toLowerCase()) {
                 case "build", "package" -> "build";
@@ -363,13 +363,13 @@ public class BuildService {
                 case "install" -> "publishToMavenLocal";
                 default -> null;
             };
-            if (task != null) return java.util.Optional.of(exe + " -x test " + task);
+            if (task != null) return java.util.Optional.of(withCd(workspace, gradleRoot, exe + " -x test " + task));
         }
         // Cargo (Rust) — accept Cargo.toml at workspace root OR exactly one level deep. The latter
         // covers the common pattern where the Rust workspace lives in a sub-directory alongside
         // other languages (e.g. <repo>/aoee/Cargo.toml in the AOEE repo where aoee-spring is Java).
         // Multiple Cargo.toml files at depth 1 → ambiguous; require a manifest commandLine.
-        Path cargoRoot = locateCargoRoot(workspace);
+        Path cargoRoot = locateBuildRoot(workspace, "Cargo.toml");
         if (cargoRoot != null) {
             // "install" intentionally maps to a release build rather than `cargo install`, since
             // `cargo install --path .` only works for crates with a [[bin]] section, and most
@@ -383,62 +383,122 @@ public class BuildService {
                 case "verify"           -> "cargo test";
                 default                 -> null;
             };
-            if (cargoCmd != null) {
-                String prefix = cargoRoot.equals(workspace) ? ""
-                    : "cd " + workspace.relativize(cargoRoot) + " && ";
-                return java.util.Optional.of(prefix + cargoCmd);
-            }
+            if (cargoCmd != null) return java.util.Optional.of(withCd(workspace, cargoRoot, cargoCmd));
         }
         // npm / pnpm — runs scripts the user defined in package.json; we don't infer goal mapping.
-        if (Files.exists(workspace.resolve("package.json"))) {
-            String pm = Files.exists(workspace.resolve("pnpm-lock.yaml")) ? "pnpm"
-                : Files.exists(workspace.resolve("yarn.lock")) ? "yarn"
+        Path nodeRoot = locateBuildRoot(workspace, "package.json");
+        if (nodeRoot != null) {
+            String pm = Files.exists(nodeRoot.resolve("pnpm-lock.yaml")) ? "pnpm"
+                : Files.exists(nodeRoot.resolve("yarn.lock")) ? "yarn"
                 : "npm";
-            // Conventional script names that map straight through.
-            return switch (commandName.toLowerCase()) {
-                case "build"   -> java.util.Optional.of(pm + " run build");
-                case "test"    -> java.util.Optional.of(pm + " test");
-                case "install" -> java.util.Optional.of(pm + " install");
-                default        -> java.util.Optional.empty();
+            String script = switch (commandName.toLowerCase()) {
+                case "build"   -> pm + " run build";
+                case "test"    -> pm + " test";
+                case "install" -> pm + " install";
+                default        -> null;
             };
+            if (script != null) return java.util.Optional.of(withCd(workspace, nodeRoot, script));
         }
         return java.util.Optional.empty();
     }
 
-    private static String describeWorkspace(Path workspace) {
+    /**
+     * Human-readable summary of what build markers were found and where, used in the
+     * "no build command" error so the user can decide between adding a manifest, passing a
+     * commandLine override, or picking a different commandName. Lists both root-level markers
+     * and one-level-deep subdir markers so polyglot monorepos surface their components.
+     */
+    static String describeWorkspace(Path workspace) {
+        java.util.LinkedHashMap<String, List<String>> found = new java.util.LinkedHashMap<>();
+        for (String marker : List.of("pom.xml", "build.gradle", "build.gradle.kts", "Cargo.toml", "package.json")) {
+            List<String> locs = locateMarkerLocations(workspace, marker);
+            if (!locs.isEmpty()) found.put(marker, locs);
+        }
+        if (found.isEmpty()) return "Detected: no recognized build files at workspace root or in first-level subdirs.";
         StringBuilder sb = new StringBuilder("Detected: ");
-        boolean any = false;
-        if (Files.exists(workspace.resolve("pom.xml")))           { sb.append("pom.xml "); any = true; }
-        if (Files.exists(workspace.resolve("build.gradle")))      { sb.append("build.gradle "); any = true; }
-        if (Files.exists(workspace.resolve("build.gradle.kts")))  { sb.append("build.gradle.kts "); any = true; }
-        if (Files.exists(workspace.resolve("Cargo.toml")))        { sb.append("Cargo.toml "); any = true; }
-        if (Files.exists(workspace.resolve("package.json")))      { sb.append("package.json "); any = true; }
-        if (!any) sb.append("no recognized build files");
-        return sb.toString().trim() + ".";
+        boolean first = true;
+        for (var e : found.entrySet()) {
+            if (!first) sb.append("; ");
+            first = false;
+            sb.append(e.getKey()).append(" in ").append(String.join(", ", e.getValue()));
+        }
+        sb.append('.');
+        // If multiple subdirs hold the same marker, the auto-fallback bails as ambiguous; tell the user.
+        boolean ambiguous = found.values().stream().anyMatch(v -> v.size() > 1);
+        if (ambiguous) {
+            sb.append(" Multiple components found — pass a commandLine override (e.g. ");
+            String example = found.entrySet().stream().filter(e -> e.getValue().size() > 1).findFirst()
+                .map(e -> "\"cd " + e.getValue().get(0) + " && <build cmd>\"").orElse("\"cd <subdir> && <build cmd>\"");
+            sb.append(example).append(") or add spec.build.commands in devportal.yaml.");
+        }
+        return sb.toString();
     }
 
     /**
-     * Find the Cargo workspace root for an asset: either the workspace itself, or exactly one
-     * subdir of it (covering the common "Java backend with a Rust subdir" pattern). Returns
-     * {@code null} when there's no Cargo.toml or there are multiple — the latter is ambiguous
-     * and the user must supply an explicit commandLine.
+     * Locate the directory that holds {@code marker} for auto-detection: the workspace root if it
+     * has the marker, otherwise exactly one first-level subdir if exactly one has it. Multiple
+     * candidates at depth 1 return {@code null} (ambiguous — caller falls through to manifest /
+     * commandLine override). Reused for Maven (pom.xml), Cargo (Cargo.toml), npm (package.json).
      */
-    private static Path locateCargoRoot(Path workspace) {
-        if (Files.exists(workspace.resolve("Cargo.toml"))) return workspace;
-        if (!Files.isDirectory(workspace)) return null;
+    static Path locateBuildRoot(Path workspace, String marker) {
+        if (Files.exists(workspace.resolve(marker))) return workspace;
+        List<Path> candidates = listFirstLevelDirsWith(workspace, marker);
+        return candidates.size() == 1 ? candidates.get(0) : null;
+    }
+
+    /** Gradle special-case: either build.gradle OR build.gradle.kts counts as a Gradle project. */
+    static Path locateGradleRoot(Path workspace) {
+        if (Files.exists(workspace.resolve("build.gradle")) || Files.exists(workspace.resolve("build.gradle.kts"))) {
+            return workspace;
+        }
         try (var stream = Files.list(workspace)) {
             List<Path> candidates = stream
                 .filter(Files::isDirectory)
-                .filter(p -> {
-                    String n = p.getFileName().toString();
-                    return !n.startsWith(".") && !"target".equals(n) && !"node_modules".equals(n);
-                })
-                .filter(p -> Files.exists(p.resolve("Cargo.toml")))
+                .filter(BuildService::isCandidateDir)
+                .filter(p -> Files.exists(p.resolve("build.gradle")) || Files.exists(p.resolve("build.gradle.kts")))
                 .toList();
             return candidates.size() == 1 ? candidates.get(0) : null;
         } catch (IOException e) {
             return null;
         }
+    }
+
+    /** All first-level subdirs containing {@code marker}, returned as relative paths for error messages. */
+    private static List<String> locateMarkerLocations(Path workspace, String marker) {
+        List<String> out = new java.util.ArrayList<>();
+        if (Files.exists(workspace.resolve(marker))) out.add("<root>");
+        for (Path sub : listFirstLevelDirsWith(workspace, marker)) {
+            out.add(workspace.relativize(sub).toString());
+        }
+        return out;
+    }
+
+    private static List<Path> listFirstLevelDirsWith(Path workspace, String marker) {
+        if (!Files.isDirectory(workspace)) return List.of();
+        try (var stream = Files.list(workspace)) {
+            return stream
+                .filter(Files::isDirectory)
+                .filter(BuildService::isCandidateDir)
+                .filter(p -> Files.exists(p.resolve(marker)))
+                .toList();
+        } catch (IOException e) {
+            return List.of();
+        }
+    }
+
+    /** Skip dotfiles + common ephemeral / vendored output dirs that shouldn't count as components. */
+    private static boolean isCandidateDir(Path dir) {
+        String n = dir.getFileName().toString();
+        if (n.startsWith(".")) return false;
+        return !SKIP_SUBDIRS.contains(n);
+    }
+
+    private static final java.util.Set<String> SKIP_SUBDIRS = java.util.Set.of(
+        "target", "node_modules", "build", "dist", "out", "vendor", ".mvn", "venv", ".venv");
+
+    /** Prefix {@code cmd} with {@code cd <relpath> &&} when the build root is in a subdir. */
+    private static String withCd(Path workspace, Path buildRoot, String cmd) {
+        return buildRoot.equals(workspace) ? cmd : "cd " + workspace.relativize(buildRoot) + " && " + cmd;
     }
 
     private static String readHeadSha(Path ws) {
