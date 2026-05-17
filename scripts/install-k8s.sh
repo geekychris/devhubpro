@@ -277,13 +277,18 @@ RUN set -eux; \
     mv /tmp/docker/docker /usr/local/bin/docker; \
     rm -rf /tmp/docker /tmp/docker.tgz
 
-# Put HOME on the PVC so SecretService's $HOME/.devportal/secrets survives
-# pod restarts. Without this, the GitHub PAT (and SSH keys, telegram tokens)
-# would live in the pod's writable layer and disappear on every rollout.
+# Put HOME on the PVC so SecretService's $HOME/.devportal/secrets and mvn's
+# local m2 cache survive pod restarts. Without this, the GitHub PAT, SSH
+# keys, telegram tokens, AND every downloaded jar would live in the pod's
+# writable layer and disappear on every rollout — making cross-asset builds
+# (e.g. a `mvn install`ed sibling jar) re-needed after each restart.
 #
-# Java's System.getProperty("user.home") reads from /etc/passwd (=/root for
-# the root user), NOT from $HOME — so the JVM arg below is required for
-# SecretService (which uses user.home) to honour the PVC mount.
+# Java's System.getProperty("user.home") reads from /etc/passwd, NOT from
+# $HOME. The portal JVM is launched with -Duser.home=... below, but child
+# JVMs (mvn, gradle) are not — and they consult passwd's root home for
+# their .m2/.gradle locations. usermod fixes passwd so every JVM agrees
+# on the PVC location without needing per-invocation -D flags.
+RUN usermod -d /var/devportal/home root
 ENV HOME=/var/devportal/home
 
 COPY --from=build /src/backend/build/libs/*.jar /app/devportal.jar

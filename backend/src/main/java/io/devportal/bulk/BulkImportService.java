@@ -207,6 +207,18 @@ public class BulkImportService {
 
             boolean languageHit = !langs.isEmpty() && r.primaryLanguage() != null
                 && langs.contains(r.primaryLanguage().toLowerCase(Locale.ROOT));
+            // GitHub's primaryLanguage is just "biggest byte share". A single CUDA file, big
+            // notebook, or vendored asset can flip it. When the primary doesn't match the user's
+            // language filter, do one extra listLanguages call and accept the repo if any
+            // requested language appears at all. One call per missed-primary repo.
+            if (!languageHit && !langs.isEmpty()) {
+                try {
+                    var allLangs = github.languagesOf(r.fullName());
+                    languageHit = langs.stream().anyMatch(allLangs::contains);
+                } catch (IOException ignored) {
+                    // network blip / 404 — fall through to the include-pattern check
+                }
+            }
             boolean includeHit  = !include.isEmpty()
                 && include.stream().anyMatch(p -> p.matcher(r.name()).find());
             if (languageHit || includeHit) out.add(r);

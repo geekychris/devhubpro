@@ -118,6 +118,19 @@ public class GitHubClient {
         return gh().getRepository(fullName);
     }
 
+    /**
+     * Lowercased set of every language GitHub detected in the repo (any non-zero byte share),
+     * not just the byte-count-winning primary. Use this when {@link GitHubRepoSummary#primaryLanguage()}
+     * lies because one big binary/notebook/CUDA file flipped the winner.
+     */
+    public java.util.Set<String> languagesOf(String fullName) throws IOException {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        for (String lang : gh().getRepository(fullName).listLanguages().keySet()) {
+            if (lang != null) out.add(lang.toLowerCase(java.util.Locale.ROOT));
+        }
+        return out;
+    }
+
     /** Fetch a file. Returns empty if the file is missing at the given ref. */
     public Optional<GitHubFileContent> getFile(String fullName, String path, String ref) throws IOException {
         GHRepository repo = gh().getRepository(fullName);

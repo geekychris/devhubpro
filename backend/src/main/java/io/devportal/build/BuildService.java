@@ -62,6 +62,14 @@ public class BuildService {
         BuildMode mode = req.mode() == null ? BuildMode.SHALLOW : BuildMode.fromDb(req.mode());
         String commandName = req.commandName() == null ? "build" : req.commandName();
 
+        // Auto-promote to DEEP when the user didn't explicitly request a mode AND this asset
+        // has at least one build-kind producer. Otherwise a shallow build silently fails with
+        // "cannot resolve dependency" because the producer's jar isn't in the local m2 yet.
+        if (req.mode() == null && hasBuildProducers(assetId)) {
+            log.info("Asset {} has build-time producers — promoting shallow build to deep", assetId);
+            mode = BuildMode.DEEP;
+        }
+
         if (mode == BuildMode.SHALLOW) {
             Prepared p = prepare(root, commandName, req.commandLine(), req.ref(), null, BuildMode.SHALLOW);
             runner.runAsync(p.build.id(), p.workspace, p.commandLine, p.gitSha, p.logPath);
@@ -82,11 +90,17 @@ public class BuildService {
 
     /** Runs producers serially as children of the root build, then runs the root itself. */
     private void runDeepChain(Prepared root, List<Asset> producers, String commandName, String ref) {
+        // Producers must land in the consumer-visible artifact cache or the root build can't see
+        // them — `mvn package` leaves jars in target/ where downstream poms can't resolve them, so
+        // force "install" for producers regardless of what the user asked for the root. Maven →
+        // `mvn install`, Gradle → `publishToMavenLocal`, Cargo → `cargo build --release` (lib lives
+        // in target/ which sibling crates path-reference; nothing else to do).
+        String producerCommand = "install";
         try {
             for (Asset producer : producers) {
                 Prepared child;
                 try {
-                    child = prepare(producer, commandName, null, ref, root.build.id(), BuildMode.SHALLOW);
+                    child = prepare(producer, producerCommand, null, ref, root.build.id(), BuildMode.SHALLOW);
                 } catch (Exception e) {
                     log.error("Deep chain: failed to queue producer {} for root build {}",
                         producer.id(), root.build.id(), e);
@@ -109,6 +123,13 @@ public class BuildService {
             log.error("Deep chain crashed for root build {}", root.build.id(), e);
             failRoot(root, "Chain crashed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
         }
+    }
+
+    private boolean hasBuildProducers(String assetId) {
+        for (io.devportal.asset.Dependency d : assets.findDependenciesOf(assetId)) {
+            if ("build".equals(d.kind())) return true;
+        }
+        return false;
     }
 
     private void failRoot(Prepared root, String reason) {
