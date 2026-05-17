@@ -35,45 +35,41 @@ public class MavenAnalyzer {
     private static final Logger log = LoggerFactory.getLogger(MavenAnalyzer.class);
 
     public boolean hasPom(Path workspace) {
-        return locatePomRoot(workspace) != null;
+        return !locatePomRoots(workspace).isEmpty();
     }
 
     public MavenAnalysis analyze(Path workspace) throws IOException {
         List<MavenCoord> published = new ArrayList<>();
         List<MavenCoord> deps = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
-        Path pomRoot = locatePomRoot(workspace);
-        if (pomRoot == null) return new MavenAnalysis(published, deps, warnings);
-        // Recursive walk uses workspace + relPath, so express the starting point as a relative
-        // string against the workspace root.
-        String relRoot = pomRoot.equals(workspace) ? "." : workspace.relativize(pomRoot).toString();
-        analyzePom(workspace, relRoot, published, deps, warnings, 0);
+        List<Path> pomRoots = locatePomRoots(workspace);
+        if (pomRoots.isEmpty()) return new MavenAnalysis(published, deps, warnings);
+        for (Path pomRoot : pomRoots) {
+            String relRoot = pomRoot.equals(workspace) ? "." : workspace.relativize(pomRoot).toString();
+            analyzePom(workspace, relRoot, published, deps, warnings, 0);
+        }
         return new MavenAnalysis(published, deps, warnings);
     }
 
     /**
-     * Accept a pom at the workspace root, or — for polyglot monorepos — at exactly one direct
-     * subdirectory. Multiple subdir poms are ambiguous; return null so the caller treats it as
-     * "no pom" rather than picking one arbitrarily.
+     * Find every Maven reactor root in the workspace: a root pom wins if present, otherwise
+     * every direct subdir containing a pom is treated as an independent reactor. Covers both
+     * polyglot monorepos (one Java subdir alongside python/rust/etc) and multi-language repos
+     * that ship several independent Java reactors as sibling subdirs.
      */
-    private static Path locatePomRoot(Path workspace) {
-        if (Files.exists(workspace.resolve("pom.xml"))) return workspace;
-        Path single = null;
+    private static List<Path> locatePomRoots(Path workspace) {
+        if (Files.exists(workspace.resolve("pom.xml"))) return List.of(workspace);
+        List<Path> out = new ArrayList<>();
         try (java.util.stream.Stream<Path> kids = Files.list(workspace)) {
             for (Path k : (Iterable<Path>) kids::iterator) {
                 if (!Files.isDirectory(k)) continue;
                 String n = k.getFileName().toString();
                 if (n.startsWith(".") || n.equals("node_modules") || n.equals("target")
                     || n.equals("build") || n.equals("dist")) continue;
-                if (Files.exists(k.resolve("pom.xml"))) {
-                    if (single != null) return null;  // ambiguous — bail
-                    single = k;
-                }
+                if (Files.exists(k.resolve("pom.xml"))) out.add(k);
             }
-        } catch (IOException e) {
-            return null;
-        }
-        return single;
+        } catch (IOException ignored) {}
+        return out;
     }
 
     private void analyzePom(Path workspace, String relPath,
