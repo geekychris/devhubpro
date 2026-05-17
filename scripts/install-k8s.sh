@@ -230,7 +230,11 @@ cat >"$BE_BUILD/Dockerfile" <<'DOCKERFILE'
 # --- 1. build the boot jar from source ---
 FROM eclipse-temurin:21-jdk-jammy AS build
 WORKDIR /src
+# backend/build.gradle.kts reads `../schema/devportal-asset.schema.json` and
+# bundles it as a generated resource — copy both trees so the relative path
+# resolves identically to a direct ./gradlew bootJar from the monorepo root.
 COPY backend/ ./backend/
+COPY schema/ ./schema/
 WORKDIR /src/backend
 RUN ./gradlew --no-daemon --quiet -x test bootJar && ls -la build/libs/
 
@@ -279,16 +283,15 @@ backend/.idea
 **/node_modules
 IGNORE
 
-# Copy only the backend tree (source needed by stage 1). Skip gradle's output
-# dirs (anchored paths to avoid hitting source dirs named "build") to keep the
-# context small.
-mkdir -p "$BE_BUILD/backend"
+# Copy the backend tree + the /schema tree it references via `../schema` in
+# build.gradle.kts. Skip gradle's output dirs (anchored paths to avoid hitting
+# source dirs named "build") to keep the context small.
 (cd "$DEVPORTAL_SRC" && tar \
     --exclude='backend/.gradle' \
     --exclude='backend/build' \
     --exclude='backend/.git' \
     --exclude='backend/.idea' \
-    -cf - backend) | tar -xf - -C "$BE_BUILD"
+    -cf - backend schema) | tar -xf - -C "$BE_BUILD"
 docker build --progress=plain -t "$BACKEND_IMAGE" "$BE_BUILD"
 ok "backend image built (eclipse-temurin + mvn + git + kubectl + docker CLI)"
 
