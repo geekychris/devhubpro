@@ -217,13 +217,75 @@ else
 fi
 ok "source ready"
 
-step "Building backend image ($BACKEND_IMAGE) via Spring Boot buildpacks"
-(cd "$DEVPORTAL_SRC/backend" && ./gradlew --quiet -x test bootBuildImage --imageName="$BACKEND_IMAGE")
-ok "backend image built"
+step "Building backend image ($BACKEND_IMAGE)"
+# Direct mode (install.sh) runs the JVM on the host and inherits the user's
+# shell — mvn/git/kubectl/docker just work. K8s mode must bake those tools
+# into the container or the JVM has nothing to exec when builds, scaffolds,
+# or apply-to-k8s code shells out. Build via custom Dockerfile (instead of
+# Paketo bootBuildImage which gives a JRE-only artifact) so the runtime has
+# the same toolbox as a Mac dev box.
+BE_BUILD=$(mktemp -d)
+trap 'rm -rf "$BE_BUILD"' EXIT
+cat >"$BE_BUILD/Dockerfile" <<'DOCKERFILE'
+# --- 1. build the boot jar from source ---
+FROM eclipse-temurin:21-jdk-jammy AS build
+WORKDIR /src
+COPY backend/ ./backend/
+WORKDIR /src/backend
+RUN ./gradlew --no-daemon --quiet -x test bootJar && ls -la build/libs/
+
+# --- 2. runtime: JRE + the toolbox the portal shells out to ---
+FROM eclipse-temurin:21-jre-jammy
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash git curl ca-certificates maven jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# kubectl + docker CLI, arch-aware (amd64 / arm64).
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) k_arch=amd64; d_arch=x86_64 ;; \
+      arm64) k_arch=arm64; d_arch=aarch64 ;; \
+      *) echo "unsupported arch $arch" >&2; exit 1 ;; \
+    esac; \
+    kver="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"; \
+    curl -fsSL "https://dl.k8s.io/release/${kver}/bin/linux/${k_arch}/kubectl" -o /usr/local/bin/kubectl; \
+    chmod +x /usr/local/bin/kubectl; \
+    curl -fsSL "https://download.docker.com/linux/static/stable/${d_arch}/docker-26.1.4.tgz" -o /tmp/docker.tgz; \
+    tar -xzf /tmp/docker.tgz -C /tmp; \
+    mv /tmp/docker/docker /usr/local/bin/docker; \
+    rm -rf /tmp/docker /tmp/docker.tgz
+
+# Put HOME on the PVC so SecretService's $HOME/.devportal/secrets survives
+# pod restarts. Without this, the GitHub PAT (and SSH keys, telegram tokens)
+# would live in the pod's writable layer and disappear on every rollout.
+ENV HOME=/var/devportal/home
+
+COPY --from=build /src/backend/build/libs/*.jar /app/devportal.jar
+WORKDIR /app
+EXPOSE 8081
+ENTRYPOINT ["java","-jar","/app/devportal.jar"]
+DOCKERFILE
+
+cat >"$BE_BUILD/.dockerignore" <<'IGNORE'
+**/.git
+**/.gradle
+**/build
+**/node_modules
+**/.idea
+IGNORE
+
+# Copy only the backend tree (source needed by stage 1). Skip .gradle/build
+# via .dockerignore above to keep the build context small (~10MB vs ~1GB+).
+mkdir -p "$BE_BUILD/backend"
+(cd "$DEVPORTAL_SRC" && tar --exclude='.gradle' --exclude='build' --exclude='.git' -cf - backend) | tar -xf - -C "$BE_BUILD"
+docker build --progress=plain -t "$BACKEND_IMAGE" "$BE_BUILD"
+ok "backend image built (eclipse-temurin + mvn + git + kubectl + docker CLI)"
 
 step "Building frontend image ($FRONTEND_IMAGE)"
 FE_BUILD=$(mktemp -d)
-trap 'rm -rf "$FE_BUILD"' EXIT
+trap 'rm -rf "$BE_BUILD" "$FE_BUILD"' EXIT
 cp -R "$DEVPORTAL_SRC/frontend/." "$FE_BUILD/"
 cat >"$FE_BUILD/Dockerfile" <<'DOCKERFILE'
 FROM node:22-alpine AS build
@@ -397,6 +459,28 @@ spec:
     requests:
       storage: 5Gi
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devportal-backend
+---
+# Single-user local mode: the backend pod gets cluster-admin so its in-pod
+# kubectl can do anything the user could from outside (apply, exec into pods,
+# manage namespaces). Do NOT ship this RBAC as-is on a multi-tenant cluster;
+# scope it down to the namespaces the portal actually manages.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devportal-backend
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: devportal-backend
+    namespace: ${DEVPORTAL_NS}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -409,6 +493,7 @@ spec:
     metadata:
       labels: { app: devportal-backend }
     spec:
+      serviceAccountName: devportal-backend
       containers:
         - name: backend
           image: ${BACKEND_IMAGE}
@@ -422,19 +507,30 @@ spec:
               value: devportal
             - name: DEVPORTAL_WORKSPACE_DIR
               value: /var/devportal/workspace
+            # HOME is set on the image to /var/devportal/home so secrets
+            # (github-token, ssh keys) live on the PVC and survive rollouts.
           ports:
             - containerPort: 8081
           readinessProbe:
             httpGet: { path: /api/health, port: 8081 }
-            initialDelaySeconds: 20
+            initialDelaySeconds: 30
             periodSeconds: 5
           volumeMounts:
             - name: state
               mountPath: /var/devportal
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
       volumes:
         - name: state
           persistentVolumeClaim:
             claimName: devportal-state
+        # Host docker daemon access for `docker build` / `docker run` of
+        # managed assets. Single-user local: the pod can do anything the
+        # docker daemon can, which is effectively root on the host.
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
 ---
 apiVersion: v1
 kind: Service
