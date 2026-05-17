@@ -268,18 +268,27 @@ EXPOSE 8081
 ENTRYPOINT ["java","-jar","/app/devportal.jar"]
 DOCKERFILE
 
+# Patterns ANCHORED to the gradle output dirs — `**/build` and `--exclude=build`
+# would also match the io.devportal.build source package, breaking compile.
+# Same trap as gitignore had before /build/ was anchored.
 cat >"$BE_BUILD/.dockerignore" <<'IGNORE'
-**/.git
-**/.gradle
-**/build
+backend/.git
+backend/.gradle
+backend/build
+backend/.idea
 **/node_modules
-**/.idea
 IGNORE
 
-# Copy only the backend tree (source needed by stage 1). Skip .gradle/build
-# via .dockerignore above to keep the build context small (~10MB vs ~1GB+).
+# Copy only the backend tree (source needed by stage 1). Skip gradle's output
+# dirs (anchored paths to avoid hitting source dirs named "build") to keep the
+# context small.
 mkdir -p "$BE_BUILD/backend"
-(cd "$DEVPORTAL_SRC" && tar --exclude='.gradle' --exclude='build' --exclude='.git' -cf - backend) | tar -xf - -C "$BE_BUILD"
+(cd "$DEVPORTAL_SRC" && tar \
+    --exclude='backend/.gradle' \
+    --exclude='backend/build' \
+    --exclude='backend/.git' \
+    --exclude='backend/.idea' \
+    -cf - backend) | tar -xf - -C "$BE_BUILD"
 docker build --progress=plain -t "$BACKEND_IMAGE" "$BE_BUILD"
 ok "backend image built (eclipse-temurin + mvn + git + kubectl + docker CLI)"
 
