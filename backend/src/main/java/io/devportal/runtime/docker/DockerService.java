@@ -277,6 +277,20 @@ public class DockerService {
             throw new ConflictException(
                 "No Dockerfile found in '" + assetId + "' workspace — cannot run a container.");
         }
+        // Multi-image manifests don't fit the single-container "run" model. Pointing the user
+        // at the right action (build-images + k8s apply, or the spinup macro) is far more
+        // useful than failing with "image not found" on a guessed default tag.
+        List<Manifest.Image> declared = readImages(ws);
+        if (!declared.isEmpty()) {
+            String tags = declared.stream().map(Manifest.Image::tag)
+                .collect(java.util.stream.Collectors.joining(", "));
+            throw new ConflictException(
+                "Asset '" + assetId + "' declares " + declared.size() + " images in "
+                    + "spec.docker.images (" + tags + ") — \"docker run\" can't pick one. "
+                    + "Use POST /api/assets/" + assetId + "/spinup for the full "
+                    + "build → apply → probe chain, or POST /api/assets/" + assetId
+                    + "/docker/build-images then /api/assets/" + assetId + "/k8s/apply for the steps separately.");
+        }
         String image = spec.image == null || spec.image.isBlank() ? "devportal/" + assetId + ":latest" : spec.image;
 
         List<PortReservation> allocated = ports.allocate(assetId, "local", false);

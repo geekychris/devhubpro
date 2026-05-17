@@ -111,6 +111,22 @@ public class AuditService {
                             "kubernetes.enabled=true but " + mp + " not found.",
                             "Create the k8s manifest dir or set kubernetes.enabled=false"));
                     }
+                    // Manifest declares a namespace but the asset row's k8s_namespace points
+                    // somewhere else — kubectl apply will fail with "namespace from object X
+                    // does not match the namespace Y". This drift is silent until a deploy
+                    // tries to actually go through; surface it loudly at audit time.
+                    String manifestNs = s.kubernetes().namespace();
+                    String assetNs = asset.k8sNamespace();
+                    if (manifestNs != null && !manifestNs.isBlank()
+                        && assetNs != null && !assetNs.isBlank()
+                        && !manifestNs.equals(assetNs)) {
+                        findings.add(new AuditFinding(
+                            "k8s.namespace-drift", "warn", "k8s",
+                            "Asset.k8s_namespace='" + assetNs + "' but manifest.spec.kubernetes.namespace='"
+                                + manifestNs + "'.",
+                            "PATCH /api/assets/" + asset.id() + " {\"k8sNamespace\":\""
+                                + manifestNs + "\"} so kubectl apply targets the right ns."));
+                    }
                 }
             }
         } catch (IOException e) {
