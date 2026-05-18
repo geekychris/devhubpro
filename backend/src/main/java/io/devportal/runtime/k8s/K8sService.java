@@ -52,8 +52,17 @@ public class K8sService {
     }
 
     public Map<String, Object> apply(String assetId) throws IOException, InterruptedException {
+        return apply(assetId, false);
+    }
+
+    public Map<String, Object> apply(String assetId, boolean force) throws IOException, InterruptedException {
         Asset asset = loadAsset(assetId);
         Path manifestPath = resolveK8sPath(assetId);
+        // Pre-flight: assets that declare spec.docker.images expect those images to be built
+        // locally before apply — kubectl will set their pods to ErrImageNeverPull otherwise.
+        // Fail fast with a structured pointer at the spinup chain so the user doesn't have to
+        // wait for the cluster to expose the failure.
+        preflightDeclaredImages(asset, force);
         // Reconcile the asset's namespace with what the YAML actually declares BEFORE rendering.
         // If the user (or scaffolder) wrote `metadata.namespace: worksphere` in the manifests but
         // the asset is still on its default (k8sNamespace == assetId), kubectl will reject the
@@ -104,12 +113,52 @@ public class K8sService {
      * every manifest that declares one agrees on a single non-default namespace, shift the asset
      * to that namespace and return the updated record. Otherwise return the asset unchanged.
      */
+    /**
+     * Refuse the apply when the asset declares images under {@code spec.docker.images} but at
+     * least one of those tags isn't present in the docker daemon — kubectl would otherwise
+     * create pods that immediately go ErrImageNeverPull/ImagePullBackOff because the local
+     * tag isn't anywhere kubelet can pull from. The corresponding {@link io.devportal.spinup.SpinupService}
+     * builds them first; point the caller at that instead of silently producing broken pods.
+     */
+    void preflightDeclaredImages(Asset asset, boolean force) throws IOException, InterruptedException {
+        if (force) return;
+        Path file = workspace.workspaceFor(asset.id()).resolve("devportal.yaml");
+        if (!Files.exists(file)) return;
+        io.devportal.manifest.Manifest m;
+        try {
+            m = manifestParser.parse(Files.readString(file)).manifest();
+        } catch (Exception e) {
+            return;
+        }
+        if (m == null || m.spec() == null || m.spec().docker() == null) return;
+        java.util.List<io.devportal.manifest.Manifest.Image> images = m.spec().docker().images();
+        if (images == null || images.isEmpty()) return;
+
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        for (io.devportal.manifest.Manifest.Image img : images) {
+            if (img.tag() == null || img.tag().isBlank()) continue;
+            ProcResult r = exec(new String[]{"docker", "image", "inspect", img.tag()});
+            if (r.exitCode != 0) missing.add(img.tag());
+        }
+        if (missing.isEmpty()) return;
+
+        throw new io.devportal.asset.error.ConflictException(
+            "Asset '" + asset.id() + "' declares " + images.size() + " image(s) in spec.docker.images "
+            + "but " + missing.size() + " are not present in the docker daemon: "
+            + String.join(", ", missing) + ". "
+            + "Run POST /api/assets/" + asset.id() + "/spinup for the full build → apply → probe chain "
+            + "(the Spin Up button in the UI), or POST /api/assets/" + asset.id() + "/docker/build-images "
+            + "to build them and then retry this apply. "
+            + "If the images were already imported into the cluster's container runtime "
+            + "out-of-band, retry with ?force=true to skip this check.");
+    }
+
     private Asset reconcileNamespaceFromManifests(Asset asset, Path manifestPath) {
         boolean isDefault = asset.k8sNamespace() == null
             || asset.k8sNamespace().isBlank()
             || asset.id().equals(asset.k8sNamespace());
         if (!isDefault) return asset;
-        java.util.Set<String> declared = scanManifestNamespaces(manifestPath);
+        java.util.Set<String> declared = K8sManifestHelpers.scanManifestNamespaces(manifestPath, yaml);
         if (declared.size() != 1) return asset;  // disagreement or none → don't touch
         String ns = declared.iterator().next();
         if (ns.equals(asset.k8sNamespace())) return asset;
@@ -124,40 +173,6 @@ public class K8sService {
         return updated;
     }
 
-    private java.util.Set<String> scanManifestNamespaces(Path source) {
-        java.util.Set<String> out = new java.util.HashSet<>();
-        try {
-            if (Files.isRegularFile(source)) {
-                collectNamespaces(source, out);
-                return out;
-            }
-            try (var stream = Files.walk(source)) {
-                stream.filter(Files::isRegularFile)
-                    .filter(p -> {
-                        String n = p.getFileName().toString().toLowerCase();
-                        return (n.endsWith(".yaml") || n.endsWith(".yml"))
-                            && !n.equals("kustomization.yaml") && !n.equals("kustomization.yml");
-                    })
-                    .forEach(p -> collectNamespaces(p, out));
-            }
-        } catch (IOException e) {
-            log.debug("scanManifestNamespaces({}): {}", source, e.getMessage());
-        }
-        return out;
-    }
-
-    private void collectNamespaces(Path file, java.util.Set<String> out) {
-        try (var parser = yaml.getFactory().createParser(Files.newBufferedReader(file))) {
-            com.fasterxml.jackson.databind.MappingIterator<com.fasterxml.jackson.databind.JsonNode> it
-                = yaml.readerFor(com.fasterxml.jackson.databind.JsonNode.class).readValues(parser);
-            while (it.hasNext()) {
-                com.fasterxml.jackson.databind.JsonNode doc = it.next();
-                if (doc == null || !doc.isObject()) continue;
-                String ns = doc.path("metadata").path("namespace").asText(null);
-                if (ns != null && !ns.isBlank()) out.add(ns);
-            }
-        } catch (IOException ignored) {}
-    }
 
     /**
      * Read all yaml manifests under {@code source}, patch Service ports[].nodePort to the
@@ -494,7 +509,7 @@ public class K8sService {
             while (it.hasNext()) {
                 com.fasterxml.jackson.databind.JsonNode doc = it.next();
                 patchService(doc, bySlot);
-                injectNamespaceIfMissing(doc, fallbackNs);
+                K8sManifestHelpers.injectNamespaceIfMissing(doc, fallbackNs);
                 out.add(doc);
             }
         }
@@ -507,28 +522,6 @@ public class K8sService {
         }
     }
 
-    /**
-     * Cluster-scoped kinds (Namespace, PersistentVolume, ClusterRole*, etc.) must not carry a
-     * metadata.namespace — kubectl rejects them with "namespace specified for cluster-scoped
-     * resource". Anything else that omits a namespace gets the asset's effectiveNamespace so the
-     * apply doesn't fall through to the kubectl context's default namespace.
-     */
-    private static final java.util.Set<String> CLUSTER_SCOPED_KINDS = java.util.Set.of(
-        "namespace", "node", "persistentvolume", "storageclass", "clusterrole",
-        "clusterrolebinding", "customresourcedefinition", "priorityclass", "podsecuritypolicy",
-        "csidriver", "csinode", "validatingwebhookconfiguration", "mutatingwebhookconfiguration",
-        "apiservice", "ingressclass", "runtimeclass", "volumesnapshotclass");
-
-    private void injectNamespaceIfMissing(com.fasterxml.jackson.databind.JsonNode doc, String fallbackNs) {
-        if (doc == null || !doc.isObject()) return;
-        String kind = doc.path("kind").asText("");
-        if (CLUSTER_SCOPED_KINDS.contains(kind.toLowerCase())) return;
-        com.fasterxml.jackson.databind.JsonNode meta = doc.path("metadata");
-        if (!(meta instanceof com.fasterxml.jackson.databind.node.ObjectNode metaObj)) return;
-        if (metaObj.hasNonNull("namespace")
-            && !metaObj.path("namespace").asText("").isBlank()) return;
-        metaObj.put("namespace", fallbackNs);
-    }
 
     private void patchService(com.fasterxml.jackson.databind.JsonNode doc,
                               java.util.Map<String, Integer> bySlot) {

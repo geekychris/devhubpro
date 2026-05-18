@@ -43,13 +43,16 @@ public class K8sController {
         // When true, after a successful apply run all spec.test.fixtures with runOnApply=true
         // in declaration order. Used to seed test data, populate caches, etc. Hook results
         // are merged into the response under the "hookResults" key.
-        @RequestParam(name = "runHooks", required = false, defaultValue = "false") boolean runHooks
+        @RequestParam(name = "runHooks", required = false, defaultValue = "false") boolean runHooks,
+        // When true, skip the pre-flight check for missing locally-built images. Use when the
+        // images were imported into the cluster's container runtime out-of-band.
+        @RequestParam(name = "force", required = false, defaultValue = "false") boolean force
     ) throws IOException, InterruptedException {
         Object applyResult;
         if ("runtime".equalsIgnoreCase(include)) {
             applyResult = composition.applyComposite(id, parseCsv(skip));
         } else {
-            applyResult = k8s.apply(id);
+            applyResult = k8s.apply(id, force);
         }
         if (!runHooks) return applyResult;
         java.util.List<io.devportal.test.FixtureResult> hookResults = fixtures.runOnApplyHooks(id);
