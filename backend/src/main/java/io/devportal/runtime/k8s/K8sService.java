@@ -54,8 +54,14 @@ public class K8sService {
     public Map<String, Object> apply(String assetId) throws IOException, InterruptedException {
         Asset asset = loadAsset(assetId);
         Path manifestPath = resolveK8sPath(assetId);
+        // Reconcile the asset's namespace with what the YAML actually declares BEFORE rendering.
+        // If the user (or scaffolder) wrote `metadata.namespace: worksphere` in the manifests but
+        // the asset is still on its default (k8sNamespace == assetId), kubectl will reject the
+        // apply with "namespace from object does not match -n flag". Trust the YAML and shift the
+        // asset to match — that's the namespace the workloads actually live in.
+        asset = reconcileNamespaceFromManifests(asset, manifestPath);
         Path renderedDir = renderForApply(asset, manifestPath);
-        String ns = effectiveNamespace(assetId);
+        String ns = effectiveNamespace(asset.id());
         ensureNamespace(ns);                    // auto-create if missing
         validateProxyPathUnique(asset.id(), renderedDir);
         Map<String, Object> result = new LinkedHashMap<>();
@@ -63,8 +69,11 @@ public class K8sService {
         result.put("namespace", ns);
         result.put("manifestPath", manifestPath.toString());
         result.put("renderedDir", renderedDir.toString());
+        // No `-n` flag: each rendered manifest now carries an explicit metadata.namespace
+        // (injected by the render step for ones that omitted it), so kubectl honours the
+        // per-resource value and won't error out when manifests disagree with a forced flag.
         ProcResult res = exec(new String[]{
-            "kubectl", "apply", "-n", ns, "-f", renderedDir.toString()
+            "kubectl", "apply", "-f", renderedDir.toString()
         });
         result.put("exitCode", res.exitCode);
         result.put("output", res.output);
@@ -75,10 +84,11 @@ public class K8sService {
     public Map<String, Object> delete(String assetId) throws IOException, InterruptedException {
         Asset asset = loadAsset(assetId);
         Path manifestPath = resolveK8sPath(assetId);
+        asset = reconcileNamespaceFromManifests(asset, manifestPath);
         Path renderedDir = renderForApply(asset, manifestPath);
-        String ns = effectiveNamespace(assetId);
+        String ns = effectiveNamespace(asset.id());
         ProcResult res = exec(new String[]{
-            "kubectl", "delete", "-n", ns, "-f", renderedDir.toString(), "--ignore-not-found=true"
+            "kubectl", "delete", "-f", renderedDir.toString(), "--ignore-not-found=true"
         });
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("asset", asset.id());
@@ -86,6 +96,67 @@ public class K8sService {
         result.put("exitCode", res.exitCode);
         result.put("output", res.output);
         return result;
+    }
+
+    /**
+     * Scan the source manifest tree for declared {@code metadata.namespace} values. If the asset
+     * is still on its default namespace (k8sNamespace == assetId, the value insert() wrote) and
+     * every manifest that declares one agrees on a single non-default namespace, shift the asset
+     * to that namespace and return the updated record. Otherwise return the asset unchanged.
+     */
+    private Asset reconcileNamespaceFromManifests(Asset asset, Path manifestPath) {
+        boolean isDefault = asset.k8sNamespace() == null
+            || asset.k8sNamespace().isBlank()
+            || asset.id().equals(asset.k8sNamespace());
+        if (!isDefault) return asset;
+        java.util.Set<String> declared = scanManifestNamespaces(manifestPath);
+        if (declared.size() != 1) return asset;  // disagreement or none → don't touch
+        String ns = declared.iterator().next();
+        if (ns.equals(asset.k8sNamespace())) return asset;
+        log.info("Reconciling asset {} k8sNamespace {} -> {} (from manifest metadata.namespace)",
+            asset.id(), asset.k8sNamespace(), ns);
+        Asset updated = new Asset(
+            asset.id(), asset.name(), asset.description(), asset.owner(), asset.type(),
+            asset.language(), asset.repoUrl(), asset.repoDefaultBranch(), asset.tags(),
+            asset.lifecycle(), ns, asset.favorite(), asset.rating(), asset.dashboardPinned(),
+            asset.createdAt(), asset.updatedAt());
+        assets.update(updated);
+        return updated;
+    }
+
+    private java.util.Set<String> scanManifestNamespaces(Path source) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        try {
+            if (Files.isRegularFile(source)) {
+                collectNamespaces(source, out);
+                return out;
+            }
+            try (var stream = Files.walk(source)) {
+                stream.filter(Files::isRegularFile)
+                    .filter(p -> {
+                        String n = p.getFileName().toString().toLowerCase();
+                        return (n.endsWith(".yaml") || n.endsWith(".yml"))
+                            && !n.equals("kustomization.yaml") && !n.equals("kustomization.yml");
+                    })
+                    .forEach(p -> collectNamespaces(p, out));
+            }
+        } catch (IOException e) {
+            log.debug("scanManifestNamespaces({}): {}", source, e.getMessage());
+        }
+        return out;
+    }
+
+    private void collectNamespaces(Path file, java.util.Set<String> out) {
+        try (var parser = yaml.getFactory().createParser(Files.newBufferedReader(file))) {
+            com.fasterxml.jackson.databind.MappingIterator<com.fasterxml.jackson.databind.JsonNode> it
+                = yaml.readerFor(com.fasterxml.jackson.databind.JsonNode.class).readValues(parser);
+            while (it.hasNext()) {
+                com.fasterxml.jackson.databind.JsonNode doc = it.next();
+                if (doc == null || !doc.isObject()) continue;
+                String ns = doc.path("metadata").path("namespace").asText(null);
+                if (ns != null && !ns.isBlank()) out.add(ns);
+            }
+        } catch (IOException ignored) {}
     }
 
     /**
@@ -111,8 +182,10 @@ public class K8sService {
         java.util.Map<String, Integer> bySlot = new java.util.HashMap<>();
         for (var r : allocations) bySlot.put(r.slotName(), r.port());
 
+        String fallbackNs = effectiveNamespace(asset.id());
+
         if (Files.isRegularFile(source)) {
-            renderOneFile(source, target.resolve(source.getFileName()), bySlot);
+            renderOneFile(source, target.resolve(source.getFileName()), bySlot, fallbackNs);
         } else {
             try (var stream = Files.walk(source)) {
                 stream.filter(Files::isRegularFile)
@@ -128,7 +201,7 @@ public class K8sService {
                         Path dst = target.resolve(rel);
                         try {
                             Files.createDirectories(dst.getParent());
-                            renderOneFile(p, dst, bySlot);
+                            renderOneFile(p, dst, bySlot, fallbackNs);
                         } catch (IOException e) {
                             log.warn("render skipped for {}: {}", p, e.getMessage());
                         }
@@ -411,7 +484,8 @@ public class K8sService {
         return null;
     }
 
-    private void renderOneFile(Path src, Path dst, java.util.Map<String, Integer> bySlot) throws IOException {
+    private void renderOneFile(Path src, Path dst, java.util.Map<String, Integer> bySlot,
+                               String fallbackNs) throws IOException {
         // Multi-doc YAML: read all docs, patch Services, write back.
         com.fasterxml.jackson.databind.node.ArrayNode out = json.createArrayNode();
         try (var parser = yaml.getFactory().createParser(Files.newBufferedReader(src))) {
@@ -420,6 +494,7 @@ public class K8sService {
             while (it.hasNext()) {
                 com.fasterxml.jackson.databind.JsonNode doc = it.next();
                 patchService(doc, bySlot);
+                injectNamespaceIfMissing(doc, fallbackNs);
                 out.add(doc);
             }
         }
@@ -430,6 +505,29 @@ public class K8sService {
                 writer.write(yaml.writeValueAsString(out.get(i)));
             }
         }
+    }
+
+    /**
+     * Cluster-scoped kinds (Namespace, PersistentVolume, ClusterRole*, etc.) must not carry a
+     * metadata.namespace — kubectl rejects them with "namespace specified for cluster-scoped
+     * resource". Anything else that omits a namespace gets the asset's effectiveNamespace so the
+     * apply doesn't fall through to the kubectl context's default namespace.
+     */
+    private static final java.util.Set<String> CLUSTER_SCOPED_KINDS = java.util.Set.of(
+        "namespace", "node", "persistentvolume", "storageclass", "clusterrole",
+        "clusterrolebinding", "customresourcedefinition", "priorityclass", "podsecuritypolicy",
+        "csidriver", "csinode", "validatingwebhookconfiguration", "mutatingwebhookconfiguration",
+        "apiservice", "ingressclass", "runtimeclass", "volumesnapshotclass");
+
+    private void injectNamespaceIfMissing(com.fasterxml.jackson.databind.JsonNode doc, String fallbackNs) {
+        if (doc == null || !doc.isObject()) return;
+        String kind = doc.path("kind").asText("");
+        if (CLUSTER_SCOPED_KINDS.contains(kind.toLowerCase())) return;
+        com.fasterxml.jackson.databind.JsonNode meta = doc.path("metadata");
+        if (!(meta instanceof com.fasterxml.jackson.databind.node.ObjectNode metaObj)) return;
+        if (metaObj.hasNonNull("namespace")
+            && !metaObj.path("namespace").asText("").isBlank()) return;
+        metaObj.put("namespace", fallbackNs);
     }
 
     private void patchService(com.fasterxml.jackson.databind.JsonNode doc,
