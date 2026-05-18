@@ -184,7 +184,11 @@ public class SpinupService {
         }
         job.append("build chain started — parent build #" + parent.id());
         // Poll the parent build's status; runImageChain marks it SUCCEEDED/FAILED when done.
-        Instant deadline = Instant.now().plus(Duration.ofMinutes(20));
+        // 60-minute cap. A cold Rust + protobuf-codegen build (e.g. AOEE aoee-server) alone is
+        // 15-25 minutes; 20 min isn't enough headroom for any multi-image chain that includes
+        // one. Underlying build keeps running after this poll gives up — extending the poll just
+        // prevents the spinup row from going FAILED while the daemon is still making progress.
+        Instant deadline = Instant.now().plus(Duration.ofMinutes(60));
         while (Instant.now().isBefore(deadline)) {
             var b = builds.findById(parent.id()).orElseThrow();
             BuildStatus s = b.status();
@@ -198,7 +202,7 @@ public class SpinupService {
             }
             Thread.sleep(2000);
         }
-        throw new IllegalStateException("image build chain timed out after 20 minutes — see build #"
+        throw new IllegalStateException("image build chain timed out after 60 minutes — see build #"
             + parent.id());
     }
 
