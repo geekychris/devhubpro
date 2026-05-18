@@ -119,14 +119,13 @@ public class SpinupService {
         try {
             Manifest manifest = readManifest(job.assetId);
 
-            // STEP 1: build images (optional). Skipped when the manifest has no images list
-            // or the caller asked for skipImageBuild.
+            // STEP 1: build images. Skipped only when the caller opted out — we DON'T pre-check
+            // the root manifest for `spec.docker.images`, because with includeRuntime=true the
+            // closure may contribute images even when the root asset declares none. Delegate the
+            // "really nothing to build" call to runBuildImages, which catches the ConflictException
+            // raised by DockerService when no plans materialised.
             if (job.skipImageBuild) {
                 job.skipStep("BUILD_IMAGES", "skipped by request");
-            } else if (manifest == null || manifest.spec() == null || manifest.spec().docker() == null
-                       || manifest.spec().docker().images() == null
-                       || manifest.spec().docker().images().isEmpty()) {
-                job.skipStep("BUILD_IMAGES", "no spec.docker.images in manifest");
             } else {
                 runBuildImages(job);
             }
@@ -174,7 +173,15 @@ public class SpinupService {
 
     private void runBuildImages(MutableJob job) throws Exception {
         job.startStep("BUILD_IMAGES");
-        BuildView parent = docker.buildAllImages(job.assetId, job.includeRuntime);
+        BuildView parent;
+        try {
+            parent = docker.buildAllImages(job.assetId, job.includeRuntime);
+        } catch (io.devportal.asset.error.ConflictException e) {
+            // DockerService raises this when no asset in the closure declares
+            // spec.docker.images — that's a "nothing to do" for spinup, not a failure.
+            job.finishStep("BUILD_IMAGES", "skipped", e.getMessage());
+            return;
+        }
         job.append("build chain started — parent build #" + parent.id());
         // Poll the parent build's status; runImageChain marks it SUCCEEDED/FAILED when done.
         Instant deadline = Instant.now().plus(Duration.ofMinutes(20));
@@ -197,12 +204,46 @@ public class SpinupService {
 
     private void runApply(MutableJob job) throws Exception {
         job.startStep("APPLY");
+        // Force-mode the apply because the prior BUILD_IMAGES step already built (or skipped)
+        // everything spinup is going to build — the preflight check would only ever spuriously
+        // refuse for things spinup deliberately skipped.
         @SuppressWarnings("unchecked")
-        Map<String, Object> result = k8s.apply(job.assetId);
+        Map<String, Object> result = k8s.apply(job.assetId, /*force*/ true, /*wait*/ 0);
         Object ns = result.get("namespace");
         Object output = result.get("output");
         job.append("kubectl apply -n " + ns + " — " + summarizeApplyOutput(output));
         job.finishStep("APPLY", "succeeded", "applied to namespace " + ns);
+
+        // New step: roll-out readiness. Surface stuck pods (ErrImagePull etc.) here so the spinup
+        // failure points at the actual workload, not at the endpoint probe two steps later.
+        job.startStep("WAIT_READY");
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> readiness = k8s.waitForReady(String.valueOf(ns), 90);
+            int total = ((Number) readiness.getOrDefault("workloadsTotal", 0)).intValue();
+            int ready = ((Number) readiness.getOrDefault("workloadsReady", 0)).intValue();
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> unhealthy = (List<Map<String, Object>>) readiness.getOrDefault(
+                "unhealthyPods", java.util.List.of());
+            if (!unhealthy.isEmpty()) {
+                for (Map<String, Object> p : unhealthy) {
+                    job.append("  ✗ " + p.get("name") + " " + p.get("phase")
+                        + " " + p.get("ready") + " — " + p.get("reason"));
+                }
+            }
+            String msg = ready + "/" + total + " workload(s) ready"
+                + (unhealthy.isEmpty() ? "" : ", " + unhealthy.size() + " pod(s) unhealthy");
+            if (Boolean.TRUE.equals(readiness.get("allReady"))) {
+                job.finishStep("WAIT_READY", "succeeded", msg);
+            } else {
+                job.finishStep("WAIT_READY", "failed", msg
+                    + " — endpoint probe will likely fail; check pod reasons above");
+            }
+        } catch (Exception e) {
+            // Don't fail the spinup over the readiness check itself — log and move on.
+            job.finishStep("WAIT_READY", "skipped",
+                "readiness check threw " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
     }
 
     private void runHooks(MutableJob job) throws Exception {

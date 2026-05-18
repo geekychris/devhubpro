@@ -30,7 +30,11 @@ public class SpinupController {
         @PathVariable String id,
         @RequestParam(name = "skipImageBuild", required = false, defaultValue = "false") boolean skipImageBuild,
         @RequestParam(name = "skipProbe", required = false, defaultValue = "false") boolean skipProbe,
-        @RequestParam(name = "includeRuntime", required = false, defaultValue = "false") boolean includeRuntime
+        // Default true: walk the runtime closure when building images so cross-asset
+        // image producers (e.g. AOEE images consumed by enterprise-social-platform's k8s
+        // manifests) get built before the consumer applies. Set false explicitly when the
+        // sibling images were imported into the cluster runtime out-of-band.
+        @RequestParam(name = "includeRuntime", required = false, defaultValue = "true") boolean includeRuntime
     ) {
         SpinupJob job = service.start(id, skipImageBuild, skipProbe, includeRuntime);
         return ResponseEntity.accepted().body(job);

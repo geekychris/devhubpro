@@ -56,6 +56,10 @@ public class K8sService {
     }
 
     public Map<String, Object> apply(String assetId, boolean force) throws IOException, InterruptedException {
+        return apply(assetId, force, 0);
+    }
+
+    public Map<String, Object> apply(String assetId, boolean force, int waitSec) throws IOException, InterruptedException {
         Asset asset = loadAsset(assetId);
         Path manifestPath = resolveK8sPath(assetId);
         // Pre-flight: assets that declare spec.docker.images expect those images to be built
@@ -87,7 +91,96 @@ public class K8sService {
         result.put("exitCode", res.exitCode);
         result.put("output", res.output);
         if (res.exitCode != 0) throw new IOException("kubectl apply failed: " + res.output);
+        if (waitSec > 0) {
+            result.put("readiness", waitForReady(ns, waitSec));
+        }
         return result;
+    }
+
+    /**
+     * After a successful apply, wait up to {@code waitSec} for each Deployment / StatefulSet /
+     * DaemonSet in {@code namespace} to reach Ready, then snapshot pod health. Returns a
+     * structured per-workload + per-unhealthy-pod report so the UI / API caller can see what
+     * progressed and what's stuck without having to shell out to kubectl themselves.
+     *
+     * <p>Bounded by {@code waitSec} per workload (worst case waitSec*workloads, but rollout
+     * status returns as soon as a workload is Ready). Default callers pass 60–90 seconds.
+     */
+    public Map<String, Object> waitForReady(String namespace, int waitSec) {
+        java.util.Map<String, Object> out = new LinkedHashMap<>();
+        out.put("namespace", namespace);
+        out.put("timeoutSec", waitSec);
+        java.util.List<java.util.Map<String, Object>> workloads = new java.util.ArrayList<>();
+        java.util.List<java.util.Map<String, Object>> unhealthyPods = new java.util.ArrayList<>();
+        int total = 0;
+        int ready = 0;
+        try {
+            for (String kind : java.util.List.of("deployment", "statefulset", "daemonset")) {
+                ProcResult list = exec(new String[]{"kubectl", "-n", namespace, "get", kind,
+                    "-o", "jsonpath={.items[*].metadata.name}"});
+                if (list.exitCode != 0 || list.output.isBlank()) continue;
+                for (String name : list.output.trim().split("\\s+")) {
+                    if (name.isBlank()) continue;
+                    total++;
+                    java.util.Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("kind", kind);
+                    row.put("name", name);
+                    ProcResult roll = exec(new String[]{"kubectl", "-n", namespace,
+                        "rollout", "status", kind + "/" + name,
+                        "--timeout=" + waitSec + "s"});
+                    boolean isReady = roll.exitCode == 0;
+                    row.put("ready", isReady);
+                    row.put("message", roll.output.trim().lines()
+                        .reduce((a, b) -> b).orElse(""));   // last line
+                    if (isReady) ready++;
+                    workloads.add(row);
+                }
+            }
+            // Snapshot pods that aren't Ready so the report surfaces the *reason* (ErrImagePull,
+            // CrashLoopBackOff, init-container failure, etc.) — rollout status alone says "timed
+            // out" without naming the failing container.
+            ProcResult pods = exec(new String[]{"kubectl", "-n", namespace, "get", "pods", "-o", "json"});
+            if (pods.exitCode == 0) {
+                com.fasterxml.jackson.databind.JsonNode root = json.readTree(pods.output);
+                for (com.fasterxml.jackson.databind.JsonNode pod : root.path("items")) {
+                    String name = pod.path("metadata").path("name").asText();
+                    String phase = pod.path("status").path("phase").asText();
+                    int readyCount = 0;
+                    int totalCount = 0;
+                    String reason = null;
+                    for (com.fasterxml.jackson.databind.JsonNode cs : pod.path("status").path("containerStatuses")) {
+                        totalCount++;
+                        if (cs.path("ready").asBoolean(false)) readyCount++;
+                        if (reason == null) {
+                            com.fasterxml.jackson.databind.JsonNode waiting = cs.path("state").path("waiting");
+                            if (!waiting.isMissingNode()) {
+                                reason = waiting.path("reason").asText(null);
+                            }
+                            com.fasterxml.jackson.databind.JsonNode term = cs.path("lastState").path("terminated");
+                            if (reason == null && !term.isMissingNode()) {
+                                reason = term.path("reason").asText(null);
+                            }
+                        }
+                    }
+                    boolean podOk = "Running".equals(phase) && readyCount == totalCount && totalCount > 0;
+                    if (podOk || "Succeeded".equals(phase)) continue;
+                    java.util.Map<String, Object> p = new LinkedHashMap<>();
+                    p.put("name", name);
+                    p.put("phase", phase);
+                    p.put("ready", readyCount + "/" + totalCount);
+                    p.put("reason", reason == null ? "" : reason);
+                    unhealthyPods.add(p);
+                }
+            }
+        } catch (Exception e) {
+            out.put("error", "readiness check failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+        out.put("workloadsTotal", total);
+        out.put("workloadsReady", ready);
+        out.put("workloads", workloads);
+        out.put("unhealthyPods", unhealthyPods);
+        out.put("allReady", total > 0 && ready == total && unhealthyPods.isEmpty());
+        return out;
     }
 
     public Map<String, Object> delete(String assetId) throws IOException, InterruptedException {

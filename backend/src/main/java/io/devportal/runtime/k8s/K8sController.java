@@ -46,13 +46,18 @@ public class K8sController {
         @RequestParam(name = "runHooks", required = false, defaultValue = "false") boolean runHooks,
         // When true, skip the pre-flight check for missing locally-built images. Use when the
         // images were imported into the cluster's container runtime out-of-band.
-        @RequestParam(name = "force", required = false, defaultValue = "false") boolean force
+        @RequestParam(name = "force", required = false, defaultValue = "false") boolean force,
+        // Seconds to wait per workload (Deployment / StatefulSet / DaemonSet) for rollout to
+        // complete, plus a pod-health snapshot included in the response. Default 0 keeps the
+        // historical "return immediately" semantics; pass e.g. 60 to surface ErrImagePull /
+        // CrashLoopBackOff synchronously instead of after a separate poll.
+        @RequestParam(name = "wait", required = false, defaultValue = "0") int wait
     ) throws IOException, InterruptedException {
         Object applyResult;
         if ("runtime".equalsIgnoreCase(include)) {
             applyResult = composition.applyComposite(id, parseCsv(skip));
         } else {
-            applyResult = k8s.apply(id, force);
+            applyResult = k8s.apply(id, force, wait);
         }
         if (!runHooks) return applyResult;
         java.util.List<io.devportal.test.FixtureResult> hookResults = fixtures.runOnApplyHooks(id);
