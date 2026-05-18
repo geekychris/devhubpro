@@ -82,9 +82,25 @@ public class K8sService {
         result.put("namespace", ns);
         result.put("manifestPath", manifestPath.toString());
         result.put("renderedDir", renderedDir.toString());
-        // No `-n` flag: each rendered manifest now carries an explicit metadata.namespace
-        // (injected by the render step for ones that omitted it), so kubectl honours the
-        // per-resource value and won't error out when manifests disagree with a forced flag.
+        // Pre-apply manifest lint — catches unbacked ConfigMap/Secret/PVC refs and access-mode
+        // mismatches that would otherwise leave pods in FailedMount or Pending state with no
+        // explicit signal. Errors block apply unless force=true; warnings always pass through.
+        java.util.List<K8sManifestLinter.LintIssue> lintIssues =
+            K8sManifestLinter.lint(renderedDir, yaml, buildClusterProbe(ns));
+        result.put("lintIssues", lintIssues);
+        if (!force) {
+            java.util.List<K8sManifestLinter.LintIssue> errors = lintIssues.stream()
+                .filter(i -> "error".equals(i.severity())).toList();
+            if (!errors.isEmpty()) {
+                String summary = errors.stream()
+                    .map(i -> "  - " + i.kind() + "/" + i.name() + " (" + i.namespace() + "): "
+                        + i.problem() + " — " + i.suggestion())
+                    .collect(java.util.stream.Collectors.joining("\n"));
+                throw new io.devportal.asset.error.ConflictException(
+                    "Pre-apply lint found " + errors.size() + " issue(s) that would leave pods stuck:\n"
+                    + summary + "\nRetry with ?force=true to apply anyway.");
+            }
+        }
         ProcResult res = exec(new String[]{
             "kubectl", "apply", "-f", renderedDir.toString()
         });
@@ -206,6 +222,39 @@ public class K8sService {
      * every manifest that declares one agrees on a single non-default namespace, shift the asset
      * to that namespace and return the updated record. Otherwise return the asset unchanged.
      */
+    /** Cluster-state probe for {@link K8sManifestLinter}. Uses kubectl to check ref existence. */
+    K8sManifestLinter.ClusterProbe buildClusterProbe(String defaultNs) {
+        return new K8sManifestLinter.ClusterProbe() {
+            @Override public boolean configMapExists(String namespace, String name) {
+                return resourceExists("configmap", namespace, name);
+            }
+            @Override public boolean secretExists(String namespace, String name) {
+                return resourceExists("secret", namespace, name);
+            }
+            @Override public boolean pvcExists(String namespace, String name) {
+                return resourceExists("pvc", namespace, name);
+            }
+            @Override public java.util.List<com.fasterxml.jackson.databind.JsonNode> allPersistentVolumes() {
+                try {
+                    ProcResult r = exec(new String[]{"kubectl", "get", "pv", "-o", "json"});
+                    if (r.exitCode != 0) return java.util.List.of();
+                    com.fasterxml.jackson.databind.JsonNode root = json.readTree(r.output);
+                    java.util.List<com.fasterxml.jackson.databind.JsonNode> out = new java.util.ArrayList<>();
+                    for (com.fasterxml.jackson.databind.JsonNode item : root.path("items")) out.add(item);
+                    return out;
+                } catch (Exception e) { return java.util.List.of(); }
+            }
+            private boolean resourceExists(String kind, String namespace, String name) {
+                if (namespace == null || namespace.isBlank()) namespace = defaultNs;
+                try {
+                    ProcResult r = exec(new String[]{"kubectl", "get", kind, name, "-n", namespace,
+                        "--ignore-not-found", "-o", "name"});
+                    return r.exitCode == 0 && !r.output.trim().isEmpty();
+                } catch (Exception e) { return false; }
+            }
+        };
+    }
+
     /**
      * Refuse the apply when the asset declares images under {@code spec.docker.images} but at
      * least one of those tags isn't present in the docker daemon — kubectl would otherwise
