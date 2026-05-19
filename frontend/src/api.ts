@@ -162,6 +162,27 @@ export type BuildProgress = {
   }[];
 };
 
+export type SpinupStep = {
+  name: string; // BUILD_IMAGES | ENSURE_NAMESPACE | APPLY | WAIT_READY | RUN_HOOKS | PROBE_ENDPOINTS
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
+  startedAt: string | null;
+  finishedAt: string | null;
+  message: string | null;
+};
+
+export type SpinupJob = {
+  id: number;
+  assetId: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  currentStep: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  steps: SpinupStep[];
+  log: string[];
+  error: string | null;
+  entryUrl: string | null;
+};
+
 export type K8sDiagnostics = {
   assetId: string;
   namespace: string;
@@ -1054,6 +1075,21 @@ export const api = {
       `/api/assets/${id}/workspace/push?branch=${encodeURIComponent(branch)}`,
       { method: 'POST' }
     ),
+
+  // ---- spinup ("start in kubernetes") ----
+  startSpinup: (
+    id: string,
+    opts: { skipImageBuild?: boolean; skipProbe?: boolean; includeRuntime?: boolean } = {}
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.skipImageBuild !== undefined) params.set('skipImageBuild', String(opts.skipImageBuild));
+    if (opts.skipProbe !== undefined) params.set('skipProbe', String(opts.skipProbe));
+    if (opts.includeRuntime !== undefined) params.set('includeRuntime', String(opts.includeRuntime));
+    const qs = params.toString();
+    return request<SpinupJob>(`/api/assets/${id}/spinup${qs ? `?${qs}` : ''}`, { method: 'POST' });
+  },
+  getSpinupJob: (id: number) => request<SpinupJob>(`/api/spinup-jobs/${id}`),
+  listSpinupJobs: () => request<SpinupJob[]>('/api/spinup-jobs'),
 };
 
 export type WorkspaceFileChange = {

@@ -120,11 +120,22 @@ public class DockerService {
         }
 
         // Resolve image entries per asset; preserve declaration order.
+        // Sync each asset's workspace up-front so a freshly merged Dockerfile / manifest change
+        // is actually built, not the stale snapshot from the last clone. discardLocal=true:
+        // assets typically have a dev_portal-injected devportal.yaml that's permanently
+        // untracked (the upstream repo doesn't carry it), so the standard dirty-tree refusal
+        // would block every sync forever.
         List<ImageBuildPlan> plans = new ArrayList<>();
         for (String aid : assetOrder) {
             Asset a = assets.findById(aid).orElse(null);
             if (a == null) continue;
-            Path ws = workspace.workspaceFor(aid);
+            Path ws;
+            try {
+                ws = workspace.syncCheckout(a.id(), a.repoUrl(), a.repoDefaultBranch(), /*discardLocal*/ true);
+            } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+                log.warn("Skipping {} in image-build chain: workspace sync failed: {}", aid, e.getMessage());
+                continue;
+            }
             if (!Files.isDirectory(ws.resolve(".git"))) continue;
             for (Manifest.Image img : readImages(ws)) {
                 if (img.tag() == null || img.tag().isBlank()) continue;

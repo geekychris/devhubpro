@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -197,6 +198,61 @@ public class K8sService {
         out.put("unhealthyPods", unhealthyPods);
         out.put("allReady", total > 0 && ready == total && unhealthyPods.isEmpty());
         return out;
+    }
+
+    /**
+     * For every Deployment in {@code namespace} whose pod-spec containers reference an image
+     * in {@code imageTags}, run {@code kubectl rollout restart}. Returns the list of restarted
+     * deployment names. Used by the spinup chain so a freshly rebuilt {@code :latest} image
+     * actually reaches pods — {@code kubectl apply} alone is a no-op when only the image bytes
+     * change (and with {@code imagePullPolicy: Never}, the kubelet won't re-pull either).
+     *
+     * <p>Tags are matched flexibly: a deployment referencing {@code docker.io/worksphere/x:latest}
+     * matches a built tag of {@code worksphere/x:latest} (strip leading {@code docker.io/}).
+     */
+    public List<String> rolloutRestartDeploymentsUsingImages(String namespace, Set<String> imageTags) {
+        List<String> restarted = new ArrayList<>();
+        if (imageTags == null || imageTags.isEmpty()) return restarted;
+        try {
+            ProcResult list = exec(new String[]{"kubectl", "-n", namespace,
+                "get", "deployments", "-o", "json"});
+            if (list.exitCode != 0) {
+                log.warn("Could not list deployments in {} for rollout restart: {}", namespace, list.output);
+                return restarted;
+            }
+            com.fasterxml.jackson.databind.JsonNode root = json.readTree(list.output);
+            for (com.fasterxml.jackson.databind.JsonNode dep : root.path("items")) {
+                String name = dep.path("metadata").path("name").asText();
+                boolean match = false;
+                for (com.fasterxml.jackson.databind.JsonNode c :
+                        dep.path("spec").path("template").path("spec").path("containers")) {
+                    String img = normaliseTag(c.path("image").asText(""));
+                    if (img.isEmpty()) continue;
+                    if (imageTags.stream().map(this::normaliseTag).anyMatch(img::equals)) {
+                        match = true;
+                        break;
+                    }
+                }
+                if (!match) continue;
+                ProcResult roll = exec(new String[]{"kubectl", "-n", namespace,
+                    "rollout", "restart", "deployment/" + name});
+                if (roll.exitCode == 0) {
+                    restarted.add(name);
+                } else {
+                    log.warn("rollout restart failed for {}/{}: {}", namespace, name, roll.output);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("rolloutRestartDeploymentsUsingImages failed for {}: {}", namespace, e.getMessage());
+        }
+        return restarted;
+    }
+
+    private String normaliseTag(String tag) {
+        if (tag == null) return "";
+        String t = tag.trim();
+        if (t.startsWith("docker.io/")) t = t.substring("docker.io/".length());
+        return t;
     }
 
     public Map<String, Object> delete(String assetId) throws IOException, InterruptedException {

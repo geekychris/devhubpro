@@ -139,10 +139,19 @@ public class SpinupService {
             // STEP 3: kubectl apply.
             runApply(job);
 
-            // STEP 4: run-on-apply hooks (test fixtures with runOnApply: true).
+            // STEP 4: rollout-restart deployments using rebuilt images. kubectl apply is a no-op
+            // when only the :latest image bytes changed; without this step, freshly built code
+            // never reaches pods (the symptom we hit chasing the AOEE Graph Cache regression).
+            runRolloutRestart(job);
+
+            // STEP 5: wait for pods to be Ready. Hard-fail the chain if not — endpoint probes
+            // would just chase symptoms otherwise.
+            runWaitReady(job);
+
+            // STEP 6: run-on-apply hooks (test fixtures with runOnApply: true).
             runHooks(job);
 
-            // STEP 5: probe endpoints.
+            // STEP 7: probe endpoints.
             if (job.skipProbe) {
                 job.skipStep("PROBE_ENDPOINTS", "skipped by request");
             } else {
@@ -193,7 +202,9 @@ public class SpinupService {
             var b = builds.findById(parent.id()).orElseThrow();
             BuildStatus s = b.status();
             if (s == BuildStatus.SUCCEEDED) {
-                job.finishStep("BUILD_IMAGES", "succeeded", "all declared images built");
+                job.builtTags = readBuiltImageTags(b.logPath());
+                job.finishStep("BUILD_IMAGES", "succeeded",
+                    "all declared images built (" + job.builtTags.size() + " tag(s))");
                 return;
             }
             if (s == BuildStatus.FAILED) {
@@ -206,6 +217,26 @@ public class SpinupService {
             + parent.id());
     }
 
+    /**
+     * Parse the parent build's summary log for {@code OK <tag>} lines (written by
+     * {@code DockerService.runImageChain}). Returns the set of tags that were successfully built
+     * in this chain — the input for the ROLLOUT_RESTART step.
+     */
+    private java.util.Set<String> readBuiltImageTags(String logPath) {
+        java.util.Set<String> tags = new java.util.LinkedHashSet<>();
+        try {
+            for (String line : Files.readString(Path.of(logPath)).split("\\R")) {
+                String t = line.trim();
+                if (!t.startsWith("OK ")) continue;
+                String[] parts = t.split("\\s+");
+                if (parts.length >= 2) tags.add(parts[1]);
+            }
+        } catch (Exception e) {
+            log.warn("Could not read built-tags from {}: {}", logPath, e.getMessage());
+        }
+        return tags;
+    }
+
     private void runApply(MutableJob job) throws Exception {
         job.startStep("APPLY");
         // Force-mode the apply because the prior BUILD_IMAGES step already built (or skipped)
@@ -215,39 +246,72 @@ public class SpinupService {
         Map<String, Object> result = k8s.apply(job.assetId, /*force*/ true, /*wait*/ 0);
         Object ns = result.get("namespace");
         Object output = result.get("output");
+        job.namespace = String.valueOf(ns);
         job.append("kubectl apply -n " + ns + " — " + summarizeApplyOutput(output));
         job.finishStep("APPLY", "succeeded", "applied to namespace " + ns);
+    }
 
-        // New step: roll-out readiness. Surface stuck pods (ErrImagePull etc.) here so the spinup
-        // failure points at the actual workload, not at the endpoint probe two steps later.
+    private void runRolloutRestart(MutableJob job) {
+        // Skip if BUILD_IMAGES didn't actually build anything (skipped by request, or no tags
+        // declared in the closure). Without rebuilt images this step is a no-op anyway.
+        if (job.builtTags == null || job.builtTags.isEmpty()) {
+            job.skipStep("ROLLOUT_RESTART", "no images rebuilt this run");
+            return;
+        }
+        if (job.namespace == null) {
+            job.skipStep("ROLLOUT_RESTART", "no namespace recorded from APPLY");
+            return;
+        }
+        job.startStep("ROLLOUT_RESTART");
+        List<String> restarted = k8s.rolloutRestartDeploymentsUsingImages(job.namespace, job.builtTags);
+        if (restarted.isEmpty()) {
+            job.finishStep("ROLLOUT_RESTART", "skipped",
+                "no deployments in " + job.namespace + " reference the rebuilt image tags");
+            return;
+        }
+        for (String d : restarted) job.append("  ↻ deployment/" + d);
+        job.finishStep("ROLLOUT_RESTART", "succeeded",
+            "restarted " + restarted.size() + " deployment(s)");
+    }
+
+    private void runWaitReady(MutableJob job) throws Exception {
+        if (job.namespace == null) {
+            job.skipStep("WAIT_READY", "no namespace recorded from APPLY");
+            return;
+        }
         job.startStep("WAIT_READY");
+        Map<String, Object> readiness;
         try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> readiness = k8s.waitForReady(String.valueOf(ns), 90);
-            int total = ((Number) readiness.getOrDefault("workloadsTotal", 0)).intValue();
-            int ready = ((Number) readiness.getOrDefault("workloadsReady", 0)).intValue();
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> unhealthy = (List<Map<String, Object>>) readiness.getOrDefault(
-                "unhealthyPods", java.util.List.of());
-            if (!unhealthy.isEmpty()) {
-                for (Map<String, Object> p : unhealthy) {
-                    job.append("  ✗ " + p.get("name") + " " + p.get("phase")
-                        + " " + p.get("ready") + " — " + p.get("reason"));
-                }
-            }
-            String msg = ready + "/" + total + " workload(s) ready"
-                + (unhealthy.isEmpty() ? "" : ", " + unhealthy.size() + " pod(s) unhealthy");
-            if (Boolean.TRUE.equals(readiness.get("allReady"))) {
-                job.finishStep("WAIT_READY", "succeeded", msg);
-            } else {
-                job.finishStep("WAIT_READY", "failed", msg
-                    + " — endpoint probe will likely fail; check pod reasons above");
-            }
+            readiness = k8s.waitForReady(job.namespace, 90);
         } catch (Exception e) {
-            // Don't fail the spinup over the readiness check itself — log and move on.
+            // The check itself crashed (kubectl missing, RBAC, etc.) — don't fail the spinup over
+            // infra of the readiness probe, just mark skipped and let downstream steps continue.
             job.finishStep("WAIT_READY", "skipped",
                 "readiness check threw " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return;
         }
+        int total = ((Number) readiness.getOrDefault("workloadsTotal", 0)).intValue();
+        int ready = ((Number) readiness.getOrDefault("workloadsReady", 0)).intValue();
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> unhealthy = (List<Map<String, Object>>) readiness.getOrDefault(
+            "unhealthyPods", java.util.List.of());
+        if (!unhealthy.isEmpty()) {
+            for (Map<String, Object> p : unhealthy) {
+                job.append("  ✗ " + p.get("name") + " " + p.get("phase")
+                    + " " + p.get("ready") + " — " + p.get("reason"));
+            }
+        }
+        String msg = ready + "/" + total + " workload(s) ready"
+            + (unhealthy.isEmpty() ? "" : ", " + unhealthy.size() + " pod(s) unhealthy");
+        if (Boolean.TRUE.equals(readiness.get("allReady"))) {
+            job.finishStep("WAIT_READY", "succeeded", msg);
+            return;
+        }
+        // Hard fail: rolling forward through hooks + endpoint probes when pods aren't Ready was
+        // hiding real failures (probe finds an old-but-running endpoint, spinup goes green). The
+        // unhealthy-pod lines above carry the actionable reasons (ErrImagePull, CrashLoopBackOff,
+        // probe-fail). The caller can rerun with skipImageBuild=true after fixing manifests.
+        throw new IllegalStateException(msg + " — see ✗ lines above for failing pod reasons");
     }
 
     private void runHooks(MutableJob job) throws Exception {
@@ -383,6 +447,8 @@ public class SpinupService {
         volatile Instant finishedAt;
         volatile String error;
         volatile String entryUrl;
+        volatile String namespace;                // set by APPLY, read by ROLLOUT_RESTART + WAIT_READY
+        volatile java.util.Set<String> builtTags; // set by BUILD_IMAGES, read by ROLLOUT_RESTART
         final List<MutableStep> steps = Collections.synchronizedList(new ArrayList<>());
         final List<String> logLines = Collections.synchronizedList(new ArrayList<>());
 

@@ -14,8 +14,9 @@ import { AskClaudeButton } from '../components/AskClaudeButton';
 import { ClusterTab } from '../components/ClusterTab';
 import { ChangesTab } from '../components/ChangesTab';
 import { FixturesTab } from '../components/FixturesTab';
+import { SpinupTab } from '../components/SpinupTab';
 
-type Tab = 'overview' | 'dependencies' | 'graph' | 'builds' | 'runtime' | 'cluster' | 'analyze' | 'changes' | 'fixtures' | 'docs' | 'panels';
+type Tab = 'overview' | 'dependencies' | 'graph' | 'builds' | 'runtime' | 'cluster' | 'spinup' | 'analyze' | 'changes' | 'fixtures' | 'docs' | 'panels';
 
 export function AssetDetailPage() {
   const { id = '' } = useParams();
@@ -31,8 +32,8 @@ export function AssetDetailPage() {
       if (
         detail === 'overview' || detail === 'dependencies' || detail === 'graph' ||
         detail === 'builds' || detail === 'runtime' || detail === 'cluster' ||
-        detail === 'analyze' || detail === 'changes' || detail === 'fixtures' ||
-        detail === 'docs' || detail === 'panels'
+        detail === 'spinup' || detail === 'analyze' || detail === 'changes' ||
+        detail === 'fixtures' || detail === 'docs' || detail === 'panels'
       ) {
         setTab(detail);
       }
@@ -108,6 +109,13 @@ export function AssetDetailPage() {
         <div className="flex gap-2">
           <AskClaudeButton assetId={a.id} />
           <button
+            onClick={() => setTab('spinup')}
+            className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+            title="Walk this asset through build → apply → wait → probe with step-by-step progress"
+          >
+            Start in Kubernetes
+          </button>
+          <button
             onClick={() => setEditing((v) => !v)}
             className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
           >
@@ -127,7 +135,7 @@ export function AssetDetailPage() {
       {editing && <EditAssetForm asset={a} onClose={() => setEditing(false)} />}
 
       <nav className="flex gap-4 border-b border-gray-200 text-sm">
-        {(['overview', 'dependencies', 'graph', 'builds', 'runtime', 'cluster', 'analyze', 'changes', 'fixtures', 'docs', 'panels'] as const).map((t) => (
+        {(['overview', 'dependencies', 'graph', 'builds', 'runtime', 'cluster', 'spinup', 'analyze', 'changes', 'fixtures', 'docs', 'panels'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -275,6 +283,7 @@ export function AssetDetailPage() {
       {tab === 'builds' && <BuildsTab assetId={id} />}
       {tab === 'runtime' && <RuntimeTab assetId={id} />}
       {tab === 'cluster' && <ClusterTab assetId={id} />}
+      {tab === 'spinup' && <SpinupTab assetId={id} />}
       {tab === 'analyze' && <AnalyzeTab assetId={id} />}
       {tab === 'changes' && <ChangesTab assetId={id} />}
       {tab === 'fixtures' && <FixturesTab assetId={id} />}
