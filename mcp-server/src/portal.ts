@@ -96,4 +96,16 @@ export const portal = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  listPeerRuntimes: (kind?: string) =>
+    request<unknown[]>(
+      `/api/peer-runtimes${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`
+    ),
+  registerPeerRuntime: (body: {
+    name: string;
+    kind: string;
+    baseUrl: string;
+    adminUiUrl?: string;
+    config?: Record<string, unknown>;
+  }) => request('/api/peer-runtimes', { method: 'POST', body: JSON.stringify(body) }),
 };
