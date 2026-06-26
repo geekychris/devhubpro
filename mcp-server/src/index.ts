@@ -197,6 +197,36 @@ const tools = [
       required: ['assetId', 'paths'],
     },
   },
+  {
+    name: 'list_peer_runtimes',
+    description:
+      'List peer runtime systems registered with Dev Portal (OrionMesh, KQueue, ...). Optionally filter by kind.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: {
+          type: 'string',
+          description: "Filter by kind ('orionmesh', 'kqueue', ...). Omit for all.",
+        },
+      },
+    },
+  },
+  {
+    name: 'register_peer_runtime',
+    description:
+      'Register (or update) a peer runtime — e.g. an OrionMesh controller or a KQueue instance. Idempotent on `name`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: "Stable slug, e.g. 'orionmesh-belmont'." },
+        kind: { type: 'string', description: "'orionmesh' | 'kqueue' | future kinds." },
+        baseUrl: { type: 'string', description: 'Controller / API base URL.' },
+        adminUiUrl: { type: 'string', description: 'Optional UI URL for deep-link/embed.' },
+        config: { type: 'object', description: 'Peer-specific config (e.g. natsUrl).' },
+      },
+      required: ['name', 'kind', 'baseUrl'],
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
@@ -273,6 +303,16 @@ async function dispatch(name: string, a: Record<string, unknown>): Promise<unkno
         message: a.message as string | undefined,
         paths: (a.paths as string[]) ?? [],
         push: Boolean(a.push),
+      });
+    case 'list_peer_runtimes':
+      return portal.listPeerRuntimes(a.kind as string | undefined);
+    case 'register_peer_runtime':
+      return portal.registerPeerRuntime({
+        name: a.name as string,
+        kind: a.kind as string,
+        baseUrl: a.baseUrl as string,
+        adminUiUrl: a.adminUiUrl as string | undefined,
+        config: a.config as Record<string, unknown> | undefined,
       });
     default:
       throw new Error(`Unknown tool: ${name}`);
