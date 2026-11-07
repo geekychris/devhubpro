@@ -1,5 +1,6 @@
 package io.devportal.api;
 
+import io.devportal.asset.error.BadRequestException;
 import io.devportal.asset.error.ConflictException;
 import io.devportal.asset.error.NotFoundException;
 import jakarta.validation.ConstraintViolationException;
@@ -40,6 +41,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<Map<String, Object>> conflict(ConflictException e) {
         return body(HttpStatus.CONFLICT, e.getMessage(), null);
+    }
+
+    @ExceptionHandler(BadRequestException.class)
+    public ResponseEntity<Map<String, Object>> badRequest(BadRequestException e) {
+        return body(HttpStatus.BAD_REQUEST, e.getMessage(), null);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

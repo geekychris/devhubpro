@@ -57,8 +57,19 @@ devportal:
     monitoring-base-url: ""    # e.g. https://grafana.internal/d/asset-overview?var-asset=
     namespace: default
 
+  registry:
+    # Deployment registry ("what is running where"). When set, writes to
+    # /api/deployments/** need header X-DevHub-Token: <token>. Reads stay open.
+    token: ${DEVHUB_REGISTRY_TOKEN:}
+    health:
+      enabled: ${DEVHUB_REGISTRY_HEALTH_ENABLED:true}
+      interval-ms: ${DEVHUB_REGISTRY_HEALTH_INTERVAL_MS:60000}
+      initial-delay-ms: 15000
+      timeout-ms: ${DEVHUB_REGISTRY_HEALTH_TIMEOUT_MS:3000}
+      concurrency: 8
+
   telegram:
-    enabled: false                                    # opt-in; set true after creating a bot via @BotFather
+    enabled: false                                   # opt-in; set true after creating a bot via @BotFather
     bot-token-file: ${user.home}/.devportal/secrets/telegram-bot-token
     allowlist-file: ${user.home}/.devportal/secrets/telegram-allowlist
     allow-groups: false                               # only respond in private chats by default
