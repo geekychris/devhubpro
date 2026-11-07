@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Deployment } from '../api';
-import { STATUS_STYLE, orderedUrls, relTime, versionText } from './deployments';
+import { STATUS_STYLE, canProbe, orderedUrls, relTime, versionText } from './deployments';
 
 export function StatusLight({ d }: { d: Deployment }) {
   const s = STATUS_STYLE[d.status] ?? STATUS_STYLE.unknown;
@@ -85,6 +85,7 @@ export function DeploymentsTable({
               <td className="py-2 pr-3 align-top text-xs text-gray-700">
                 {[d.namespace, d.name].filter(Boolean).join(' / ') || '—'}
                 <div className="text-[11px] text-gray-400" title="Who reported it">{d.source}</div>
+                {d.notes && <div className="text-[11px] text-gray-600">{d.notes}</div>}
               </td>
               <td className="py-2 pr-3 align-top font-mono text-xs text-gray-700">{versionText(d)}</td>
               <td className="py-2 pr-3 align-top">
@@ -113,7 +114,7 @@ export function DeploymentsTable({
                 <div title={d.lastCheckedAt ?? ''}>checked {relTime(d.lastCheckedAt)}</div>
               </td>
               <td className="py-2 align-top text-right whitespace-nowrap">
-                {!d.retiredAt && (d.healthUrl || d.urls.length > 0) && (
+                {!d.retiredAt && canProbe(d) && (
                   <button
                     onClick={() => check.mutate(d.id)}
                     className="text-xs text-blue-700 hover:underline"

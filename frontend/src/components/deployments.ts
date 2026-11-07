@@ -70,3 +70,11 @@ export function versionText(d: Deployment): string {
   const parts = [d.version, d.ref, d.commit ? d.commit.slice(0, 10) : null].filter(Boolean);
   return parts.length ? parts.join(' · ') : '—';
 }
+
+const isHttp = (u: string | null | undefined) => !!u && /^https?:\/\//i.test(u.trim());
+
+/** Mirrors the backend: health URL, else an http(s) URL of a running deployment. */
+export function canProbe(d: Deployment): boolean {
+  if (isHttp(d.healthUrl)) return true;
+  return d.phase === 'running' && d.urls.some((u) => isHttp(u.url));
+}

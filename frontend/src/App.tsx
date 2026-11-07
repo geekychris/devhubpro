@@ -25,7 +25,7 @@ export function App() {
             />
           </Link>
           <SearchBar />
-          <nav className="flex gap-4 text-sm ml-auto">
+          <nav className="flex gap-3 text-sm ml-auto whitespace-nowrap">
             <NavLink
               to="/deployments"
               className={({ isActive }) =>
