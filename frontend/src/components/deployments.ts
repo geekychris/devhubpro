@@ -73,8 +73,9 @@ export function versionText(d: Deployment): string {
 
 const isHttp = (u: string | null | undefined) => !!u && /^https?:\/\//i.test(u.trim());
 
-/** Mirrors the backend: health URL, else an http(s) URL of a running deployment. */
+/** Mirrors the backend: health URL, else the primary URL of a running deployment when it is http(s). */
 export function canProbe(d: Deployment): boolean {
   if (isHttp(d.healthUrl)) return true;
-  return d.phase === 'running' && d.urls.some((u) => isHttp(u.url));
+  const primary = d.urls.find((u) => u.primary);
+  return d.phase === 'running' && !!primary && isHttp(primary.url);
 }

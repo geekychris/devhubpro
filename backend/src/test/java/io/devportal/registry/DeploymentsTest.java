@@ -33,15 +33,19 @@ class DeploymentsTest {
     }
 
     @Test
-    void probeUrlPrefersHealthThenPrimaryThenFirstHttp() {
+    void probeUrlIsHealthUrlElseHttpPrimaryOnly() {
         List<DeploymentUrl> urls = List.of(
             new DeploymentUrl("ssh", "ssh://m1.local", false),
             new DeploymentUrl("api", "http://wopr:31000/api", false),
             new DeploymentUrl("UI", "http://wopr:31080", true));
         assertEquals("http://wopr:31080/health", Deployments.probeUrl("http://wopr:31080/health", "running", urls));
         assertEquals("http://wopr:31080", Deployments.probeUrl(null, "running", urls));
-        assertEquals("http://wopr:31000/api",
-            Deployments.probeUrl(null, "running", List.of(urls.get(0), urls.get(1))));
+        // a non-primary http endpoint (e.g. a REST API) is never probed
+        assertNull(Deployments.probeUrl(null, "running", List.of(urls.get(0), urls.get(1))));
+        // non-http primary (kafka://) + http API endpoint: nothing to probe, the reporter's status stands
+        assertNull(Deployments.probeUrl(null, "running", List.of(
+            new DeploymentUrl("Brokers", "kafka://wopr.local:31092", true),
+            new DeploymentUrl("REST", "http://wopr.local:31200", false))));
         // a delivered (built, not running) deployment is only probed via an explicit health URL
         assertNull(Deployments.probeUrl(null, "delivered", urls));
         assertNull(Deployments.probeUrl("ssh://x", "running", List.of(urls.get(0))));

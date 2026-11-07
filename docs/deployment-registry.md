@@ -28,7 +28,7 @@ Table `deployment` (migration `V10__deployment_registry.sql`):
 | `version`, `commit`, `ref` | what is deployed |
 | `phase` | `running` (supposed to be up) or `delivered` (built / PR delivered, not known to run) |
 | `urls[]` | `{label, url, primary}` links |
-| `healthUrl` | what the poller probes (default: the primary URL of a running deployment) |
+| `healthUrl` | what the poller probes (default: the primary URL of a running deployment, if it is http(s); other links are never probed) |
 | `source` | who reported it: `cloud-stack saaspack`, `cloud-stack sdlc`, `claude-code`, `manual` … |
 | `labels`, `notes` | free-form string map, text |
 | `status` | `healthy` \| `degraded` \| `down` \| `unknown` \| `reported` \| `retired` |
@@ -40,7 +40,7 @@ Unique on `(asset_id, target, namespace, name)`; that is what makes reports idem
 
 ### Status
 
-- Something to probe (an http(s) `healthUrl`, or a primary URL while `phase=running`): the
+- Something to probe (an http(s) `healthUrl`, or an http(s) *primary* URL while `phase=running` — non-primary links such as REST endpoints are never probed): the
   **poller owns the status**. A new (or revived, or re-pointed) deployment starts `unknown`
   and is checked within seconds; afterwards each sweep sets `healthy` (2xx/3xx, also
   401/403 — it answered, it just wants a login), `down` (no answer, timeout, 502/503/504) or

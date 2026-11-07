@@ -47,15 +47,17 @@ public final class Deployments {
         return s;
     }
 
-    /** The URL to probe: explicit health URL, else the primary (or first) http(s) URL of a running deployment. */
+    /**
+     * The URL to probe: the explicit health URL, else the primary URL of a running deployment
+     * when it is http(s). Non-primary links (an API endpoint that answers GET / with a 400, say)
+     * are never probed, so a reporter that sends no health URL and no http primary keeps
+     * control of the status.
+     */
     public static String probeUrl(String healthUrl, String phase, List<DeploymentUrl> urls) {
         if (isHttp(healthUrl)) return healthUrl;
         if (!"running".equals(phase) || urls == null) return null;
         for (DeploymentUrl u : urls) {
-            if (u != null && u.primary() && isHttp(u.url())) return u.url();
-        }
-        for (DeploymentUrl u : urls) {
-            if (u != null && isHttp(u.url())) return u.url();
+            if (u != null && u.primary()) return isHttp(u.url()) ? u.url() : null;
         }
         return null;
     }
