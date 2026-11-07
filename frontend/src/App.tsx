@@ -9,6 +9,7 @@ import { PortsPage } from './pages/PortsPage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { ProxyRoutesPage } from './pages/ProxyRoutesPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { DeploymentsPage } from './pages/DeploymentsPage';
 import { SearchBar } from './components/SearchBar';
 
 export function App() {
@@ -25,6 +26,14 @@ export function App() {
           </Link>
           <SearchBar />
           <nav className="flex gap-4 text-sm ml-auto">
+            <NavLink
+              to="/deployments"
+              className={({ isActive }) =>
+                isActive ? 'text-blue-400 font-medium' : 'text-gray-300 hover:text-white'
+              }
+            >
+              Deployments
+            </NavLink>
             <NavLink
               to="/dashboard"
               className={({ isActive }) =>
@@ -102,7 +111,8 @@ export function App() {
       </header>
       <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-6">
         <Routes>
-          <Route path="/" element={<DashboardPage />} />
+          <Route path="/" element={<DeploymentsPage />} />
+          <Route path="/deployments" element={<DeploymentsPage />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/assets" element={<AssetsPage />} />
           <Route path="/assets/:id" element={<AssetDetailPage />} />

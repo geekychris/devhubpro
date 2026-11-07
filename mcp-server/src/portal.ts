@@ -3,6 +3,11 @@
  * The backend URL defaults to http://localhost:8081 — override with DEVPORTAL_URL env var.
  */
 const BASE = process.env.DEVPORTAL_URL ?? 'http://localhost:8081';
+/** Shared secret for deployment-registry writes, when the backend sets DEVHUB_REGISTRY_TOKEN. */
+const REGISTRY_TOKEN = process.env.DEVHUB_REGISTRY_TOKEN ?? '';
+const registryHeaders: Record<string, string> = REGISTRY_TOKEN
+  ? { 'Content-Type': 'application/json', 'X-DevHub-Token': REGISTRY_TOKEN }
+  : { 'Content-Type': 'application/json' };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -108,4 +113,25 @@ export const portal = {
     adminUiUrl?: string;
     config?: Record<string, unknown>;
   }) => request('/api/peer-runtimes', { method: 'POST', body: JSON.stringify(body) }),
+
+  listDeployments: (f: Record<string, string | boolean | undefined>) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(f)) {
+      if (v !== undefined && v !== '' && v !== false) params.set(k, String(v));
+    }
+    return request<unknown[]>(`/api/deployments${params.toString() ? `?${params}` : ''}`);
+  },
+  listDeploymentTargets: () => request<unknown[]>('/api/deployments/targets'),
+  getDeployment: (id: number) => request(`/api/deployments/${id}`),
+  reportDeployments: (body: {
+    source: string;
+    reconcile?: boolean;
+    reconcileTargets?: string[];
+    deployments: Record<string, unknown>[];
+  }) =>
+    request('/api/deployments/report', {
+      method: 'POST',
+      headers: registryHeaders,
+      body: JSON.stringify(body),
+    }),
 };

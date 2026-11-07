@@ -227,6 +227,81 @@ const tools = [
       required: ['name', 'kind', 'baseUrl'],
     },
   },
+  {
+    name: 'list_deployments',
+    description:
+      'Deployment registry: what is running where. Lists reported deployments (asset, target such as wopr/mp2/m1/spark, namespace, version, URLs, health status). Filter by target, assetId, status, source or phase; set targetsOnly for a per-target roll-up instead.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: "Target name as reported, e.g. 'wopr', 'mp2', 'm1', 'spark'" },
+        assetId: { type: 'string' },
+        status: { type: 'string', enum: ['healthy', 'degraded', 'down', 'unknown', 'reported', 'retired'] },
+        source: { type: 'string', description: "Reporter, e.g. 'cloud-stack saaspack', 'manual'" },
+        phase: { type: 'string', enum: ['running', 'delivered'] },
+        q: { type: 'string', description: 'Substring over asset, target, namespace, version, source' },
+        includeRetired: { type: 'boolean', default: false },
+        targetsOnly: { type: 'boolean', default: false, description: 'Return per-target counts instead of rows' },
+      },
+    },
+  },
+  {
+    name: 'get_deployment',
+    description: 'Fetch one deployment by numeric id (from list_deployments).',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'number' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'report_deployment',
+    description:
+      'Report (upsert) a deployment into the registry - idempotent on (assetId, target, namespace, name). If assetId is unknown, a minimal asset is created from asset.name / asset.repoUrl. Use phase "delivered" for something built or delivered as a PR but not known to be running. Store hostnames/URLs exactly as you reach them; never resolve them to IPs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        assetId: { type: 'string', description: 'Existing or new asset id (slug: lowercase letters, digits, dashes)' },
+        asset: {
+          type: 'object',
+          description: 'Used only to create the asset when it does not exist yet',
+          properties: {
+            name: { type: 'string' },
+            repoUrl: { type: 'string' },
+            type: { type: 'string', enum: ['library', 'service', 'meta-asset'] },
+            description: { type: 'string' },
+            tags: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        target: { type: 'string', description: "Where it runs: 'wopr', 'mp2', 'm1', 'spark', ..." },
+        targetKind: { type: 'string', enum: ['k8s-cluster', 'host', 'faas', 'docker', 'mac', 'other'] },
+        namespace: { type: 'string' },
+        name: { type: 'string', description: 'Instance name when an asset runs more than once on a target' },
+        version: { type: 'string' },
+        commit: { type: 'string' },
+        ref: { type: 'string' },
+        phase: { type: 'string', enum: ['running', 'delivered'], default: 'running' },
+        urls: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string' },
+              url: { type: 'string' },
+              primary: { type: 'boolean' },
+            },
+            required: ['url'],
+          },
+        },
+        healthUrl: { type: 'string', description: 'HTTP URL the registry polls (default: the primary URL)' },
+        status: { type: 'string', enum: ['healthy', 'degraded', 'down', 'unknown', 'reported'] },
+        labels: { type: 'object', additionalProperties: { type: 'string' } },
+        notes: { type: 'string' },
+        source: { type: 'string', default: 'claude-code', description: 'Who is reporting' },
+      },
+      required: ['target'],
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
@@ -314,6 +389,28 @@ async function dispatch(name: string, a: Record<string, unknown>): Promise<unkno
         adminUiUrl: a.adminUiUrl as string | undefined,
         config: a.config as Record<string, unknown> | undefined,
       });
+    case 'list_deployments': {
+      if (a.targetsOnly) return portal.listDeploymentTargets();
+      return portal.listDeployments({
+        target: a.target as string | undefined,
+        assetId: a.assetId as string | undefined,
+        status: a.status as string | undefined,
+        source: a.source as string | undefined,
+        phase: a.phase as string | undefined,
+        q: a.q as string | undefined,
+        includeRetired: Boolean(a.includeRetired),
+      });
+    }
+    case 'get_deployment':
+      return portal.getDeployment(a.id as number);
+    case 'report_deployment': {
+      const { source, ...item } = a;
+      const res = (await portal.reportDeployments({
+        source: (source as string) || 'claude-code',
+        deployments: [item],
+      })) as { deployments?: unknown[] };
+      return res.deployments?.[0] ?? res;
+    }
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

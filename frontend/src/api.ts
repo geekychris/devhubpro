@@ -1090,7 +1090,125 @@ export const api = {
   },
   getSpinupJob: (id: number) => request<SpinupJob>(`/api/spinup-jobs/${id}`),
   listSpinupJobs: () => request<SpinupJob[]>('/api/spinup-jobs'),
+
+  // ---- deployment registry ("what is running where") ----
+  listDeployments: (f: DeploymentFilter = {}) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(f)) {
+      if (v !== undefined && v !== '' && v !== false) params.set(k, String(v));
+    }
+    const qs = params.toString();
+    return request<Deployment[]>(`/api/deployments${qs ? `?${qs}` : ''}`);
+  },
+  getDeployment: (id: number) => request<Deployment>(`/api/deployments/${id}`),
+  listDeploymentTargets: () => request<DeploymentTargetSummary[]>('/api/deployments/targets'),
+  listAssetDeployments: (assetId: string, includeRetired = false) =>
+    request<Deployment[]>(
+      `/api/assets/${assetId}/deployments${includeRetired ? '?includeRetired=true' : ''}`
+    ),
+  checkDeployment: (id: number) =>
+    request<Deployment>(`/api/deployments/${id}/check`, { method: 'POST', headers: registryWriteHeaders() }),
+  retireDeployment: (id: number) =>
+    request<Deployment>(`/api/deployments/${id}/retire`, { method: 'POST', headers: registryWriteHeaders() }),
+  deleteDeployment: (id: number) =>
+    request<void>(`/api/deployments/${id}`, { method: 'DELETE', headers: registryWriteHeaders() }),
+  reportDeployment: (body: DeploymentReport) =>
+    request<Deployment>('/api/deployments', {
+      method: 'POST',
+      headers: registryWriteHeaders(),
+      body: JSON.stringify(body),
+    }),
 };
+
+export type DeploymentStatus = 'reported' | 'healthy' | 'degraded' | 'down' | 'unknown' | 'retired';
+
+export type DeploymentUrl = { label: string; url: string; primary: boolean };
+
+export type Deployment = {
+  id: number;
+  key: string;
+  assetId: string;
+  assetName: string;
+  target: string;
+  targetKind: 'k8s-cluster' | 'host' | 'faas' | 'docker' | 'mac' | 'other';
+  namespace: string;
+  name: string;
+  version: string | null;
+  commit: string | null;
+  ref: string | null;
+  phase: 'running' | 'delivered';
+  urls: DeploymentUrl[];
+  healthUrl: string | null;
+  source: string;
+  labels: Record<string, string>;
+  notes: string | null;
+  status: DeploymentStatus;
+  reportedStatus: string | null;
+  lastCheckedAt: string | null;
+  lastError: string | null;
+  lastLatencyMs: number | null;
+  firstSeenAt: string;
+  lastReportedAt: string;
+  retiredAt: string | null;
+};
+
+export type DeploymentFilter = Partial<{
+  target: string;
+  assetId: string;
+  status: string;
+  source: string;
+  phase: string;
+  q: string;
+  includeRetired: boolean;
+}>;
+
+export type DeploymentTargetSummary = {
+  target: string;
+  targetKind: string;
+  total: number;
+  healthy: number;
+  degraded: number;
+  down: number;
+  unknown: number;
+  reported: number;
+  lastReportedAt: string | null;
+};
+
+export type DeploymentReport = {
+  assetId?: string;
+  asset?: { name?: string; repoUrl?: string; type?: string; description?: string; tags?: string[] };
+  target: string;
+  targetKind?: string;
+  namespace?: string;
+  name?: string;
+  version?: string;
+  commit?: string;
+  ref?: string;
+  phase?: 'running' | 'delivered';
+  urls?: DeploymentUrl[];
+  healthUrl?: string;
+  status?: string;
+  labels?: Record<string, string>;
+  notes?: string;
+  source?: string;
+};
+
+/**
+ * Registry writes need X-DevHub-Token when the backend has DEVHUB_REGISTRY_TOKEN set.
+ * The browser keeps the token the user typed on the Deployments page (this browser only).
+ */
+export const REGISTRY_TOKEN_KEY = 'devhub.registryToken';
+
+export function registryWriteHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    const t = localStorage.getItem(REGISTRY_TOKEN_KEY);
+    if (t) h['X-DevHub-Token'] = t;
+  } catch {
+    // storage unavailable: send no token
+  }
+  return h;
+}
 
 export type WorkspaceFileChange = {
   path: string;
