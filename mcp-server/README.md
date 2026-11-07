@@ -46,3 +46,8 @@ Then `claude` will see tools prefixed `mcp__devportal__*`.
 | `attach_consumes`     | Wire asset → meta-asset (role).                         |
 | `audit_asset`         | Drift report against portal conventions.                |
 | `state_git_sync`      | YAML export + commit to state repo.                     |
+| `list_deployments`    | What is running where (filters; `targetsOnly` roll-up). |
+| `get_deployment`      | One deployment by id.                                   |
+| `report_deployment`   | Upsert a deployment into the registry.                  |
+
+Registry writes send `X-DevHub-Token` when `DEVHUB_REGISTRY_TOKEN` is set in the server's env (needed only if the backend sets the same variable).

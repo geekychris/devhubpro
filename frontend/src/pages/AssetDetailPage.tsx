@@ -15,8 +15,9 @@ import { ClusterTab } from '../components/ClusterTab';
 import { ChangesTab } from '../components/ChangesTab';
 import { FixturesTab } from '../components/FixturesTab';
 import { SpinupTab } from '../components/SpinupTab';
+import { AssetDeploymentsTab } from '../components/AssetDeploymentsTab';
 
-type Tab = 'overview' | 'dependencies' | 'graph' | 'builds' | 'runtime' | 'cluster' | 'spinup' | 'analyze' | 'changes' | 'fixtures' | 'docs' | 'panels';
+type Tab = 'overview' | 'deployments' | 'dependencies' | 'graph' | 'builds' | 'runtime' | 'cluster' | 'spinup' | 'analyze' | 'changes' | 'fixtures' | 'docs' | 'panels';
 
 export function AssetDetailPage() {
   const { id = '' } = useParams();
@@ -30,7 +31,7 @@ export function AssetDetailPage() {
     function onGoto(e: Event) {
       const detail = (e as CustomEvent).detail as Tab;
       if (
-        detail === 'overview' || detail === 'dependencies' || detail === 'graph' ||
+        detail === 'overview' || detail === 'deployments' || detail === 'dependencies' || detail === 'graph' ||
         detail === 'builds' || detail === 'runtime' || detail === 'cluster' ||
         detail === 'spinup' || detail === 'analyze' || detail === 'changes' ||
         detail === 'fixtures' || detail === 'docs' || detail === 'panels'
@@ -135,7 +136,7 @@ export function AssetDetailPage() {
       {editing && <EditAssetForm asset={a} onClose={() => setEditing(false)} />}
 
       <nav className="flex gap-4 border-b border-gray-200 text-sm">
-        {(['overview', 'dependencies', 'graph', 'builds', 'runtime', 'cluster', 'spinup', 'analyze', 'changes', 'fixtures', 'docs', 'panels'] as const).map((t) => (
+        {(['overview', 'deployments', 'dependencies', 'graph', 'builds', 'runtime', 'cluster', 'spinup', 'analyze', 'changes', 'fixtures', 'docs', 'panels'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -151,6 +152,8 @@ export function AssetDetailPage() {
       </nav>
 
       {tab === 'overview' && <AssetOverview asset={a} />}
+
+      {tab === 'deployments' && <AssetDeploymentsTab assetId={a.id} />}
 
       {tab === 'dependencies' && (
         <div className="space-y-4">

@@ -8,7 +8,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8081',
+        // Point the dev UI at another backend with DEVPORTAL_API_URL=http://host:port.
+        target: process.env.DEVPORTAL_API_URL ?? 'http://localhost:8081',
         changeOrigin: true,
       },
     },

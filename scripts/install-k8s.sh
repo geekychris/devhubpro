@@ -23,10 +23,21 @@
 #   DEVPORTAL_TAG        image tag (default: dev)
 #   DEVPORTAL_NODEPORT   nodePort for the UI (default: 30573)
 #   DEVPORTAL_URLS_HOST   host part of URLs the portal shows back to users
-#                         (default: localhost; set to spark.local etc. when the
-#                         portal is on a server and the browser is on your laptop)
+#                         (default: the value the existing install already uses,
+#                         else localhost; set to spark.local / a MagicDNS name when
+#                         the portal is on a server and the browser is elsewhere)
+#   DEVPORTAL_REGISTRY_TOKEN  optional shared secret for deployment-registry
+#                         writes (X-DevHub-Token). Stored in Secret
+#                         devportal-registry; unset = keep the existing Secret
+#                         (or none: writes stay open, like the rest of the portal)
 #   DEVPORTAL_LOAD_KIND   if "1", run `kind load docker-image` (kind clusters)
 #   DEVPORTAL_AUTO_INSTALL "1" to brew/apt/dnf install missing deps (default: 0)
+#
+# Re-running the script upgrades an existing install in place: the Postgres
+# StatefulSet, its PVC (devportal-pg-data) and the state PVC are re-applied
+# unchanged, so data is kept; the devportal-pg Secret is only created when it
+# is missing; the new images roll out because each run stamps a build id on
+# the pod templates. Flyway migrates the schema on backend start.
 
 set -euo pipefail
 
@@ -36,7 +47,8 @@ DEVPORTAL_REPO="${DEVPORTAL_REPO:-https://github.com/geekychris/devhubpro.git}"
 DEVPORTAL_NS="${DEVPORTAL_NS:-devportal}"
 DEVPORTAL_TAG="${DEVPORTAL_TAG:-dev}"
 DEVPORTAL_NODEPORT="${DEVPORTAL_NODEPORT:-30573}"
-DEVPORTAL_URLS_HOST="${DEVPORTAL_URLS_HOST:-localhost}"
+DEVPORTAL_URLS_HOST="${DEVPORTAL_URLS_HOST:-}"
+DEVPORTAL_REGISTRY_TOKEN="${DEVPORTAL_REGISTRY_TOKEN:-}"
 DEVPORTAL_LOAD_KIND="${DEVPORTAL_LOAD_KIND:-0}"
 DEVPORTAL_AUTO_INSTALL="${DEVPORTAL_AUTO_INSTALL:-0}"
 
@@ -216,6 +228,18 @@ require kubectl kubectl
 kubectl cluster-info >/dev/null 2>&1 || die "kubectl cannot reach a cluster — start one (Rancher Desktop / kind / minikube / microk8s)"
 ok "prereqs ok — context: $(kubectl config current-context 2>/dev/null || echo "($KUBE_FLAVOR)")"
 
+# Upgrading an existing install: keep the URL host it already uses unless the
+# caller set one (it is often set by hand with `kubectl set env`).
+if [ -z "$DEVPORTAL_URLS_HOST" ]; then
+  DEVPORTAL_URLS_HOST=$(kubectl -n "$DEVPORTAL_NS" get deployment devportal-backend \
+    -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="DEVPORTAL_URLS_HOST")].value}' 2>/dev/null || true)
+  if [ -n "$DEVPORTAL_URLS_HOST" ]; then
+    ok "keeping DEVPORTAL_URLS_HOST=$DEVPORTAL_URLS_HOST from the existing install"
+  else
+    DEVPORTAL_URLS_HOST=localhost
+  fi
+fi
+
 step "Fetching source -> $DEVPORTAL_SRC ($DEVPORTAL_REF)"
 if [ -d "$DEVPORTAL_SRC/.git" ]; then
   git -C "$DEVPORTAL_SRC" fetch --quiet origin "$DEVPORTAL_REF"
@@ -343,23 +367,43 @@ RUN pnpm build
 
 FROM nginx:1.27-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# A template, rendered by the image's entrypoint (envsubst of defined env vars
+# only, so nginx's own $variables survive). NGINX_ENTRYPOINT_LOCAL_RESOLVERS
+# makes the entrypoint export NGINX_LOCAL_RESOLVERS from /etc/resolv.conf.
+RUN rm -f /etc/nginx/conf.d/default.conf
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1 \
+    DEVPORTAL_BACKEND_HOST=devportal-backend.devportal.svc.cluster.local
 EXPOSE 80
 DOCKERFILE
-cat >"$FE_BUILD/nginx.conf" <<'NGINX'
+# The backend is resolved per request (resolver + variable proxy_pass), not
+# once at startup. A static `proxy_pass http://devportal-backend:8081` makes
+# nginx exit with "host not found in upstream" whenever cluster DNS is not up
+# yet — which is every time the node or microk8s restarts — and that was most
+# of the frontend's restart count. Now a cold start just returns 502 for /api
+# until the backend answers, and nginx stays up.
+cat >"$FE_BUILD/nginx.conf.template" <<'NGINX'
 server {
   listen 80;
   root /usr/share/nginx/html;
   index index.html;
 
+  resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
+  set $devportal_backend http://${DEVPORTAL_BACKEND_HOST}:8081;
+
+  location = /healthz {
+    access_log off;
+    default_type text/plain;
+    return 200 "ok\n";
+  }
   location /api/ {
-    proxy_pass http://devportal-backend:8081;
+    proxy_pass $devportal_backend;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
   }
   location /ws/ {
-    proxy_pass http://devportal-backend:8081;
+    proxy_pass $devportal_backend;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -426,7 +470,10 @@ fi
 step "Applying manifests to namespace '$DEVPORTAL_NS'"
 kubectl create namespace "$DEVPORTAL_NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
-kubectl -n "$DEVPORTAL_NS" apply -f - <<YAML >/dev/null
+# Postgres credentials: create once, never overwrite (an upgrade must not
+# change the password the existing data directory was initialised with).
+if ! kubectl -n "$DEVPORTAL_NS" get secret devportal-pg >/dev/null 2>&1; then
+  kubectl -n "$DEVPORTAL_NS" apply -f - <<YAML >/dev/null
 apiVersion: v1
 kind: Secret
 metadata:
@@ -436,7 +483,23 @@ stringData:
   POSTGRES_DB: devportal
   POSTGRES_USER: devportal
   POSTGRES_PASSWORD: devportal
----
+YAML
+  ok "created Secret devportal-pg"
+fi
+
+# Deployment-registry write token (optional). Piped through stdin so the value
+# never appears on a command line or in the script's output.
+if [ -n "$DEVPORTAL_REGISTRY_TOKEN" ]; then
+  printf '%s' "$DEVPORTAL_REGISTRY_TOKEN" | kubectl -n "$DEVPORTAL_NS" create secret generic devportal-registry \
+    --from-file=token=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  ok "registry token stored in Secret devportal-registry"
+fi
+
+# Stamped on the pod templates so every run rolls the pods onto the images
+# just imported (the tag stays :dev, so the spec would otherwise not change).
+BUILD_ID="$(git -C "$DEVPORTAL_SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)-$(date +%Y%m%d%H%M%S)"
+
+kubectl -n "$DEVPORTAL_NS" apply -f - <<YAML >/dev/null
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -528,18 +591,39 @@ metadata:
   name: devportal-backend
 spec:
   replicas: 1
+  # One pod owns the RWO state volume and the SSH port: stop the old pod before
+  # starting the new one. rollingUpdate: null clears the defaults an older
+  # install carries, which the API rejects alongside type Recreate.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels: { app: devportal-backend }
   template:
     metadata:
       labels: { app: devportal-backend }
+      annotations:
+        devportal.io/build-id: "${BUILD_ID}"
     spec:
       serviceAccountName: devportal-backend
+      # Wait for Postgres instead of crash-looping: without this the backend
+      # exits 1 on every node / microk8s restart until the database is up, and
+      # each exit grows the restart count and the CrashLoopBackOff delay.
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "until pg_isready -h devportal-pg -p 5432 -U devportal -q; do echo waiting for devportal-pg; sleep 2; done"]
       containers:
         - name: backend
           image: ${BACKEND_IMAGE}
           imagePullPolicy: IfNotPresent
+          resources:
+            requests: { cpu: 100m, memory: 768Mi }
           env:
+            - name: DEVHUB_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef: { name: devportal-registry, key: token, optional: true }
             - name: SPRING_DATASOURCE_URL
               value: jdbc:postgresql://devportal-pg:5432/devportal
             - name: SPRING_DATASOURCE_USERNAME
@@ -554,10 +638,19 @@ spec:
             # (github-token, ssh keys) live on the PVC and survive rollouts.
           ports:
             - containerPort: 8081
+          # Startup probe gives the JVM + Flyway up to 5 minutes; readiness
+          # takes over afterwards. No liveness probe on purpose: a slow GC or a
+          # long in-pod build must not get the portal killed.
+          startupProbe:
+            httpGet: { path: /api/health, port: 8081 }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
           readinessProbe:
             httpGet: { path: /api/health, port: 8081 }
-            initialDelaySeconds: 30
-            periodSeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           volumeMounts:
             - name: state
               mountPath: /var/devportal
@@ -596,17 +689,25 @@ spec:
   template:
     metadata:
       labels: { app: devportal-frontend }
+      annotations:
+        devportal.io/build-id: "${BUILD_ID}"
     spec:
       containers:
         - name: frontend
           image: ${FRONTEND_IMAGE}
           imagePullPolicy: IfNotPresent
+          env:
+            - name: DEVPORTAL_BACKEND_HOST
+              value: devportal-backend.${DEVPORTAL_NS}.svc.cluster.local
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
           ports:
             - containerPort: 80
           readinessProbe:
-            httpGet: { path: /, port: 80 }
-            initialDelaySeconds: 3
-            periodSeconds: 5
+            httpGet: { path: /healthz, port: 80 }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 3
 ---
 apiVersion: v1
 kind: Service
@@ -633,14 +734,18 @@ cat <<EOF
 ${c_bold}DevHub Pro is running in Kubernetes.${c_reset}
 
   namespace        $DEVPORTAL_NS
-  UI (NodePort)    http://localhost:${DEVPORTAL_NODEPORT}
-  backend image    $BACKEND_IMAGE
+  UI (NodePort)    http://${DEVPORTAL_URLS_HOST}:${DEVPORTAL_NODEPORT}
+  deployments      http://${DEVPORTAL_URLS_HOST}:${DEVPORTAL_NODEPORT}/deployments
+  in-cluster API   http://devportal-backend.${DEVPORTAL_NS}.svc.cluster.local:8081
+  backend image    $BACKEND_IMAGE  (build $BUILD_ID)
   frontend image   $FRONTEND_IMAGE
 
 Logs:
   kubectl -n $DEVPORTAL_NS logs deploy/devportal-backend -f
   kubectl -n $DEVPORTAL_NS logs deploy/devportal-frontend -f
 
-Tear down:
+Upgrade in place (keeps the Postgres PVC and data): re-run this script.
+
+Tear down (DELETES the database PVC too):
   kubectl delete namespace $DEVPORTAL_NS
 EOF

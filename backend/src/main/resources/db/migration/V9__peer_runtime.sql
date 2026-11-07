@@ -29,7 +29,8 @@ CREATE INDEX peer_runtime_lifecycle_idx ON peer_runtime(lifecycle);
 -- Links an asset to a peer runtime that hosts it. Many-to-many because a single
 -- asset (e.g. a service) can be deployed on more than one peer at once.
 CREATE TABLE asset_peer_runtime (
-    asset_id        BIGINT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    -- upstream schema fix: asset.id is TEXT (V2 core_schema), not BIGINT.
+    asset_id        TEXT NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
     peer_runtime_id BIGINT NOT NULL REFERENCES peer_runtime(id) ON DELETE CASCADE,
     -- Peer-specific identifier — for OrionMesh, the Service resource name.
     -- For KQueue, the queue name.
