@@ -21,6 +21,7 @@ Postgres is the database of record. Workspaces, secrets, logs, and rendered mani
 - [Repository layout](#repository-layout)
 - [Configuration](#configuration)
 - [Subsystems in depth](#subsystems-in-depth)
+  - [Deployment registry](#deployment-registry)
   - [Asset catalog and onboarding](#asset-catalog-and-onboarding)
   - [Maven analysis and auto-wire](#maven-analysis-and-auto-wire)
   - [Build orchestration](#build-orchestration)
@@ -94,6 +95,12 @@ The backend is the single trust boundary. The frontend talks to it over HTTP via
 ---
 
 ## What it does
+
+### Deployment registry — what is running where
+- Every **deployment** of an asset on a **target** (`wopr`, `mp2`, `m1`, `spark` …) with version / commit / ref, URLs, health URL, labels and who reported it.
+- Reporters push idempotent batches to `POST /api/deployments/report` (cloud-stack does this for its SaaS pack parts, FaaS functions, Lantern Market, itself, execution hosts and SDLC deliveries); source-scoped **reconcile** retires what disappeared.
+- Background **health poller** (60 s, short timeouts) turns that into green / amber / red lights; the **Deployments** page is the landing view, grouped by target.
+- Optional shared secret (`DEVHUB_REGISTRY_TOKEN` → `X-DevHub-Token`) for writes; reads stay open.
 
 ### Catalog and graph
 - Register GitHub repos as assets one at a time, or **bulk-import a whole org** filtered by language and name pattern.
@@ -229,7 +236,9 @@ Brings up Postgres in Docker, builds the backend and frontend, starts both in th
 curl -fsSL https://raw.githubusercontent.com/geekychris/devhubpro/main/scripts/install-k8s.sh | bash
 ```
 
-Builds a backend image with Spring Boot buildpacks (no Dockerfile required) and a frontend nginx image, then applies a generated manifest set (Postgres `StatefulSet` + PVC, backend `Deployment`, frontend `Deployment` + `NodePort` Service) to the current `kubectl` context. UI lands on http://localhost:30573.
+Builds a backend image (eclipse-temurin + the toolbox the portal shells out to) and a frontend nginx image, then applies a generated manifest set (Postgres `StatefulSet` + PVC, backend `Deployment`, frontend `Deployment` + `NodePort` Service) to the current `kubectl` context. UI lands on http://localhost:30573.
+
+**Re-running it upgrades in place.** The Postgres StatefulSet and both PVCs (`devportal-pg-data`, `devportal-state`) are re-applied unchanged, so data is kept; the `devportal-pg` Secret is only created when missing; each run stamps a build id on the pod templates so the freshly imported `:dev` images roll out; Flyway migrates the schema when the backend starts. An existing install's `DEVPORTAL_URLS_HOST` is kept unless you pass one. See [Upgrading an existing Kubernetes install](#upgrading-an-existing-kubernetes-install).
 
 Both scripts work on **macOS and Linux**, **arm64 and x86_64**. Missing prerequisites (Java 21, Node 20, Docker, kubectl, pnpm) cause a fast fail with a platform-specific install hint (`brew install ...` on macOS; `apt-get` / `dnf` / `pacman` lines on Linux) — nothing destructive happens before the prereq check. Set `DEVPORTAL_AUTO_INSTALL=1` to opt in to the script running those package-manager commands for you (will prompt for `sudo` on Linux; Docker still needs a manual install on macOS because of its GUI).
 
@@ -250,6 +259,8 @@ Kubernetes-only:
 | `DEVPORTAL_TAG` | `dev` | image tag |
 | `DEVPORTAL_NODEPORT` | `30573` | UI nodePort |
 | `DEVPORTAL_LOAD_KIND` | `0` | set to `1` to `kind load` the built images |
+| `DEVPORTAL_URLS_HOST` | existing install's value, else `localhost` | host part of URLs the portal shows (e.g. `spark.local`, a MagicDNS name) |
+| `DEVPORTAL_REGISTRY_TOKEN` | unset (keep existing Secret) | write token for the deployment registry, stored in Secret `devportal-registry` |
 
 Direct-mode only:
 
@@ -257,6 +268,25 @@ Direct-mode only:
 |---|---|---|
 | `DEVPORTAL_START` | `1` | set to `0` to build only, don't launch |
 | `DEVPORTAL_OPEN` | `1` | set to `0` to skip auto-opening the browser |
+
+#### Upgrading an existing Kubernetes install
+
+Run the installer again on the cluster host, pointing at the ref you want. For the spark install (microk8s, namespace `devportal`, UI NodePort 30573):
+
+```sh
+ssh -t spark.local 'curl -fsSL https://raw.githubusercontent.com/geekychris/devhubpro/main/scripts/install-k8s.sh \
+  | DEVPORTAL_REF=main DEVPORTAL_URLS_HOST=spark.local bash'
+```
+
+Until this lands on `main`, use the branch for both the script and the source: replace `main` with `feat/deployment-registry` in the URL and in `DEVPORTAL_REF`.
+
+It asks for `sudo` once (microk8s `ctr image import`). Optional: `DEVPORTAL_REGISTRY_TOKEN=…` to require a token for registry writes (then give the same value to the reporters). Check afterwards: `curl -s http://spark.local:30573/api/health` and `http://spark.local:30573/deployments`.
+
+What survives: the database (PVC `devportal-pg-data`), the state volume (GitHub token, SSH keys, workspaces, m2 cache on `devportal-state`), the Postgres credentials. What changes: the two images, the backend pod waits for Postgres (init container) and starts under a startup probe, the frontend resolves the backend per request — see *Restarts after a node restart* below.
+
+#### Restarts after a node restart
+
+Older installs crash-looped every time the node or microk8s restarted: nginx resolved `devportal-backend` once at startup and exited with *host not found in upstream* while cluster DNS was still coming up, and the backend exited when Postgres was not up yet. Each exit grows the restart count and the back-off. The current manifests avoid both (runtime DNS resolution in nginx, `wait-for-postgres` init container, startup probe), so a restart of the node is one restart of each pod.
 
 If you'd rather wire it up by hand, the manual steps follow.
 
@@ -381,12 +411,32 @@ Backend reads from `application.yml` plus env overrides:
 | `devportal.k8s.namespace`                    | —                        | `default`                                 |
 | `devportal.k8s.monitoring-base-url`          | —                        | empty (Grafana link disabled)             |
 | `spring.datasource.*`                        | `DEVPORTAL_DB_*`         | `localhost:5432/devportal/devportal`      |
+| `devportal.urls.host`                        | `DEVPORTAL_URLS_HOST`    | `localhost`                               |
+| `devportal.registry.token`                   | `DEVHUB_REGISTRY_TOKEN`  | empty (registry writes open)              |
+| `devportal.registry.health.enabled`          | `DEVHUB_REGISTRY_HEALTH_ENABLED` | `true`                            |
+| `devportal.registry.health.interval-ms`      | `DEVHUB_REGISTRY_HEALTH_INTERVAL_MS` | `60000`                       |
+| `devportal.registry.health.timeout-ms`       | `DEVHUB_REGISTRY_HEALTH_TIMEOUT_MS` | `3000`                         |
 
 **Never embed a port in code.** Always pull from the port registry.
 
 ---
 
 ## Subsystems in depth
+
+### Deployment registry
+
+Assets are what we build; deployments are where they run. The `deployment` table (V10) links an asset to a target (`wopr`, `mp2`, `m1`, `spark` … with a kind: `k8s-cluster`, `host`, `faas`, `docker`, `mac`, `other`), a namespace and instance name, the deployed version / commit / ref, its URLs and health URL, the reporting source, labels, and a status kept fresh by a background poller. Reports are idempotent on `(assetId, target, namespace, name)`; an unknown asset id gets a minimal asset (tagged `registry`). Targets and URLs are stored exactly as reported — hostnames are never resolved to IPs.
+
+| | |
+|---|---|
+| `POST /api/deployments/report` | batch upsert `{source, reconcile, reconcileTargets, deployments[]}` |
+| `POST /api/deployments` | upsert one |
+| `GET /api/deployments?target=&assetId=&status=&source=&phase=&q=&includeRetired=` | list |
+| `GET /api/deployments/targets` | per-target counts |
+| `GET /api/deployments/{id}`, `GET /api/assets/{id}/deployments` | one / per asset |
+| `POST /api/deployments/{id}/check`, `/retire`; `DELETE /api/deployments/{id}` | actions |
+
+Writes need `X-DevHub-Token` when `DEVHUB_REGISTRY_TOKEN` is set. Full reference — fields, status rules, reconcile, poller settings, curl examples — in **[docs/deployment-registry.md](docs/deployment-registry.md)**.
 
 ### Asset catalog and onboarding
 
@@ -665,6 +715,9 @@ The MCP server (`mcp-server/`) is a Node + TypeScript stdio server that wraps th
 | `attach_consumes`     | Mark an asset as consuming a meta-asset with a role label.               |
 | `audit_asset`         | Drift report against portal conventions.                                 |
 | `state_git_sync`      | Export portal state to YAML and commit to the state git repo.            |
+| `list_deployments`    | What is running where; filters, or `targetsOnly` for per-target counts.  |
+| `get_deployment`      | One deployment by id.                                                    |
+| `report_deployment`   | Upsert a deployment (auto-creates the asset); token from `DEVHUB_REGISTRY_TOKEN`. |
 
 The server has no port and no state — every tool call is an HTTP request. Restart Claude Code after rebuilding the server (`pnpm build`) to pick up new tools.
 
@@ -825,6 +878,7 @@ graph LR
     manifest_snapshot((manifest_snapshot))
     port_reservation((port_reservation))
     build((build))
+    deployment((deployment))
 
     asset -->|1:N| asset_version
     asset -->|1:N<br/>maven groupId/artifactId| asset_artifact
@@ -836,6 +890,7 @@ graph LR
     asset -->|1:N<br/>scope=local or k8s-nodeport| port_reservation
     asset -->|1:N| build
     build -->|self-ref<br/>parent_build_id| build
+    asset -->|1:N<br/>target, namespace, name| deployment
 ```
 
 Migrations live in `backend/src/main/resources/db/migration/`:
@@ -845,6 +900,9 @@ Migrations live in `backend/src/main/resources/db/migration/`:
 - `V3__build.sql` — `build` with `mode`, `parent_build_id`, `status`, log path.
 - `V4__asset_artifact.sql` — published artifact coordinates per asset.
 - `V5__asset_namespace.sql` — `asset.k8s_namespace` (defaults to asset id).
+- `V6`–`V8` — favorites / ratings, dashboard pin, projects.
+- `V9__peer_runtime.sql` — peer runtimes (OrionMesh, KQueue …) and their asset links.
+- `V10__deployment_registry.sql` — `deployment`: what runs where (see [Deployment registry](#deployment-registry)).
 
 ---
 
@@ -852,7 +910,8 @@ Migrations live in `backend/src/main/resources/db/migration/`:
 
 | URL                                              | What it is                            |
 |--------------------------------------------------|---------------------------------------|
-| http://localhost:5173                            | DevHub Pro UI                         |
+| http://localhost:5173                            | DevHub Pro UI (lands on Deployments)  |
+| http://localhost:8081/api/deployments            | Deployment registry (JSON)            |
 | http://localhost:8081/api/health                 | Backend liveness                      |
 | http://localhost:8081/swagger-ui/index.html      | Interactive OpenAPI explorer          |
 | http://localhost:8081/v3/api-docs                | Raw OpenAPI JSON                      |
