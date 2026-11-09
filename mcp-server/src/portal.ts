@@ -122,6 +122,8 @@ export const portal = {
     return request<unknown[]>(`/api/deployments${params.toString() ? `?${params}` : ''}`);
   },
   listDeploymentTargets: () => request<unknown[]>('/api/deployments/targets'),
+  assetCloudStackActivity: (assetId: string) =>
+    request(`/api/assets/${encodeURIComponent(assetId)}/cloudstack`),
   getDeployment: (id: number) => request(`/api/deployments/${id}`),
   reportDeployments: (body: {
     source: string;

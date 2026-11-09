@@ -49,5 +49,6 @@ Then `claude` will see tools prefixed `mcp__devportal__*`.
 | `list_deployments`    | What is running where (filters; `targetsOnly` roll-up). |
 | `get_deployment`      | One deployment by id.                                   |
 | `report_deployment`   | Upsert a deployment into the registry.                  |
+| `asset_cloudstack_activity` | cloud-stack activity for an asset's repo: open PRs (needs, checks), latest Jenkins result, agent runs, `newTaskUrl`. |
 
 Registry writes send `X-DevHub-Token` when `DEVHUB_REGISTRY_TOKEN` is set in the server's env (needed only if the backend sets the same variable).

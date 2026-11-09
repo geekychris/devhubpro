@@ -30,6 +30,16 @@
 #                         writes (X-DevHub-Token). Stored in Secret
 #                         devportal-registry; unset = keep the existing Secret
 #                         (or none: writes stay open, like the rest of the portal)
+#   DEVPORTAL_CLOUDSTACK_API_URL  cloud-stack API the backend calls for the asset
+#                         page's cloud-stack tab (env CLOUDSTACK_API_URL). Default:
+#                         the existing install's value, else
+#                         http://cloudstack-api.cloudstack.svc.cluster.local:8080.
+#                         Set it to "off" to turn the feature off.
+#   DEVPORTAL_CLOUDSTACK_UI_URL   public cloud-stack UI for "New task" links (env
+#                         CLOUDSTACK_UI_URL), e.g. http://spark.tail8791ce.ts.net:30880.
+#                         Default: the existing install's value, else empty.
+#                         The cloud-stack API token comes from the optional Secret
+#                         cloudstack-api-token (key: token) — see the README.
 #   DEVPORTAL_LOAD_KIND   if "1", run `kind load docker-image` (kind clusters)
 #   DEVPORTAL_AUTO_INSTALL "1" to brew/apt/dnf install missing deps (default: 0)
 #
@@ -49,6 +59,9 @@ DEVPORTAL_TAG="${DEVPORTAL_TAG:-dev}"
 DEVPORTAL_NODEPORT="${DEVPORTAL_NODEPORT:-30573}"
 DEVPORTAL_URLS_HOST="${DEVPORTAL_URLS_HOST:-}"
 DEVPORTAL_REGISTRY_TOKEN="${DEVPORTAL_REGISTRY_TOKEN:-}"
+DEVPORTAL_CLOUDSTACK_API_URL="${DEVPORTAL_CLOUDSTACK_API_URL:-}"
+DEVPORTAL_CLOUDSTACK_UI_URL="${DEVPORTAL_CLOUDSTACK_UI_URL:-}"
+CLOUDSTACK_DEFAULT_API_URL="http://cloudstack-api.cloudstack.svc.cluster.local:8080"
 DEVPORTAL_LOAD_KIND="${DEVPORTAL_LOAD_KIND:-0}"
 DEVPORTAL_AUTO_INSTALL="${DEVPORTAL_AUTO_INSTALL:-0}"
 
@@ -238,6 +251,27 @@ if [ -z "$DEVPORTAL_URLS_HOST" ]; then
   else
     DEVPORTAL_URLS_HOST=localhost
   fi
+fi
+
+# cloud-stack link: same rule — keep what the existing install uses unless the
+# caller passes a value.
+existing_backend_env() {
+  kubectl -n "$DEVPORTAL_NS" get deployment devportal-backend \
+    -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name==\"$1\")].value}" 2>/dev/null || true
+}
+if [ -z "$DEVPORTAL_CLOUDSTACK_API_URL" ]; then
+  if kubectl -n "$DEVPORTAL_NS" get deployment devportal-backend >/dev/null 2>&1 \
+     && kubectl -n "$DEVPORTAL_NS" get deployment devportal-backend -o jsonpath='{.spec.template.spec.containers[0].env[*].name}' 2>/dev/null \
+        | tr ' ' '\n' | grep -qx CLOUDSTACK_API_URL; then
+    DEVPORTAL_CLOUDSTACK_API_URL=$(existing_backend_env CLOUDSTACK_API_URL)
+    [ -n "$DEVPORTAL_CLOUDSTACK_API_URL" ] || DEVPORTAL_CLOUDSTACK_API_URL=off
+  else
+    DEVPORTAL_CLOUDSTACK_API_URL="$CLOUDSTACK_DEFAULT_API_URL"
+  fi
+fi
+[ "$DEVPORTAL_CLOUDSTACK_API_URL" = "off" ] && DEVPORTAL_CLOUDSTACK_API_URL=""
+if [ -z "$DEVPORTAL_CLOUDSTACK_UI_URL" ]; then
+  DEVPORTAL_CLOUDSTACK_UI_URL=$(existing_backend_env CLOUDSTACK_UI_URL)
 fi
 
 step "Fetching source -> $DEVPORTAL_SRC ($DEVPORTAL_REF)"
@@ -495,6 +529,13 @@ if [ -n "$DEVPORTAL_REGISTRY_TOKEN" ]; then
   ok "registry token stored in Secret devportal-registry"
 fi
 
+# cloud-stack API token: never handled by this script (it would have to pass
+# through it). Point at the README's one-liner when the Secret is missing.
+if [ -n "$DEVPORTAL_CLOUDSTACK_API_URL" ] && ! kubectl -n "$DEVPORTAL_NS" get secret cloudstack-api-token >/dev/null 2>&1; then
+  warn "Secret cloudstack-api-token is missing: the cloud-stack tab will report 'unauthorized'."
+  warn "  Create it from cloud-stack's token (README, 'cloud-stack'), then: kubectl -n $DEVPORTAL_NS rollout restart deploy/devportal-backend"
+fi
+
 # Stamped on the pod templates so every run rolls the pods onto the images
 # just imported (the tag stays :dev, so the spec would otherwise not change).
 BUILD_ID="$(git -C "$DEVPORTAL_SRC" rev-parse --short HEAD 2>/dev/null || echo unknown)-$(date +%Y%m%d%H%M%S)"
@@ -634,6 +675,14 @@ spec:
               value: /var/devportal/workspace
             - name: DEVPORTAL_URLS_HOST
               value: ${DEVPORTAL_URLS_HOST}
+            # cloud-stack link (asset page "cloud-stack" tab). Empty API URL = off.
+            - name: CLOUDSTACK_API_URL
+              value: "${DEVPORTAL_CLOUDSTACK_API_URL}"
+            - name: CLOUDSTACK_UI_URL
+              value: "${DEVPORTAL_CLOUDSTACK_UI_URL}"
+            - name: CLOUDSTACK_TOKEN
+              valueFrom:
+                secretKeyRef: { name: cloudstack-api-token, key: token, optional: true }
             # HOME is set on the image to /var/devportal/home so secrets
             # (github-token, ssh keys) live on the PVC and survive rollouts.
           ports:
@@ -737,6 +786,7 @@ ${c_bold}DevHub Pro is running in Kubernetes.${c_reset}
   UI (NodePort)    http://${DEVPORTAL_URLS_HOST}:${DEVPORTAL_NODEPORT}
   deployments      http://${DEVPORTAL_URLS_HOST}:${DEVPORTAL_NODEPORT}/deployments
   in-cluster API   http://devportal-backend.${DEVPORTAL_NS}.svc.cluster.local:8081
+  cloud-stack      API ${DEVPORTAL_CLOUDSTACK_API_URL:-(off)}  UI ${DEVPORTAL_CLOUDSTACK_UI_URL:-(unset)}
   backend image    $BACKEND_IMAGE  (build $BUILD_ID)
   frontend image   $FRONTEND_IMAGE
 

@@ -1118,6 +1118,72 @@ export const api = {
       headers: registryWriteHeaders(),
       body: JSON.stringify(body),
     }),
+
+  // ---- cloud-stack (agent / SDLC platform) — read through the backend, which holds the token ----
+  getAssetCloudStack: (assetId: string) =>
+    request<CloudStackActivity>(`/api/assets/${encodeURIComponent(assetId)}/cloudstack`),
+  getCloudStackStatus: () => request<CloudStackStatus>('/api/cloudstack/status'),
+};
+
+export type CloudStackChecks = 'passing' | 'failing' | 'pending' | 'none';
+export type CloudStackJenkinsStatus = 'succeeded' | 'failed' | 'running' | 'queued' | 'none';
+
+export type CloudStackPR = {
+  url: string | null;
+  number: number | null;
+  title: string | null;
+  needs: string | null;
+  why: string | null;
+  /** passing | failing | pending | none (other values shown as-is) */
+  checks: CloudStackChecks | string;
+  runId: string | null;
+};
+
+export type CloudStackJenkins = {
+  status: CloudStackJenkinsStatus | string;
+  jobName: string | null;
+  buildNumber: number | null;
+  sha: string | null;
+  link: string | null;
+  at: string | null;
+};
+
+export type CloudStackRun = {
+  id: string | null;
+  state: string | null;
+  workflow: string | null;
+  title: string | null;
+  url: string | null;
+  createdAt: string | null;
+};
+
+export type CloudStackReasonCode = 'not-configured' | 'no-github-repo' | 'unreachable' | 'unauthorized' | 'bad-response';
+
+export type CloudStackActivity = {
+  assetId: string;
+  available: boolean;
+  reasonCode: CloudStackReasonCode | null;
+  reason: string | null;
+  repo: string | null;
+  repoUrl: string | null;
+  openPRs: CloudStackPR[];
+  jenkins: CloudStackJenkins | null;
+  runs: CloudStackRun[];
+  /** cloud-stack "New task" page for this repo; set whenever a UI URL is known, even when unavailable */
+  newTaskUrl: string | null;
+  uiUrl: string | null;
+  fetchedAt: string;
+};
+
+export type CloudStackStatus = {
+  configured: boolean;
+  tokenConfigured: boolean;
+  apiUrl: string | null;
+  uiUrl: string | null;
+  reachable: boolean | null;
+  error: string | null;
+  latencyMs: number | null;
+  checkedAt: string;
 };
 
 export type DeploymentStatus = 'reported' | 'healthy' | 'degraded' | 'down' | 'unknown' | 'retired';
