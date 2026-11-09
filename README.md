@@ -22,6 +22,7 @@ Postgres is the database of record. Workspaces, secrets, logs, and rendered mani
 - [Configuration](#configuration)
 - [Subsystems in depth](#subsystems-in-depth)
   - [Deployment registry](#deployment-registry)
+  - [cloud-stack](#cloud-stack)
   - [Asset catalog and onboarding](#asset-catalog-and-onboarding)
   - [Maven analysis and auto-wire](#maven-analysis-and-auto-wire)
   - [Build orchestration](#build-orchestration)
@@ -261,6 +262,8 @@ Kubernetes-only:
 | `DEVPORTAL_LOAD_KIND` | `0` | set to `1` to `kind load` the built images |
 | `DEVPORTAL_URLS_HOST` | existing install's value, else `localhost` | host part of URLs the portal shows (e.g. `spark.local`, a MagicDNS name) |
 | `DEVPORTAL_REGISTRY_TOKEN` | unset (keep existing Secret) | write token for the deployment registry, stored in Secret `devportal-registry` |
+| `DEVPORTAL_CLOUDSTACK_API_URL` | existing install's value, else `http://cloudstack-api.cloudstack.svc.cluster.local:8080` | cloud-stack API for the asset page's cloud-stack tab (`off` = disabled); token from Secret `cloudstack-api-token` — see [docs/cloudstack.md](docs/cloudstack.md) |
+| `DEVPORTAL_CLOUDSTACK_UI_URL` | existing install's value, else empty | public cloud-stack UI for "New task" links, e.g. `http://spark.tail8791ce.ts.net:30880` |
 
 Direct-mode only:
 
@@ -416,6 +419,9 @@ Backend reads from `application.yml` plus env overrides:
 | `devportal.registry.health.enabled`          | `DEVHUB_REGISTRY_HEALTH_ENABLED` | `true`                            |
 | `devportal.registry.health.interval-ms`      | `DEVHUB_REGISTRY_HEALTH_INTERVAL_MS` | `60000`                       |
 | `devportal.registry.health.timeout-ms`       | `DEVHUB_REGISTRY_HEALTH_TIMEOUT_MS` | `3000`                         |
+| `cloudstack.api-url`                         | `CLOUDSTACK_API_URL`     | empty (cloud-stack link off)              |
+| `cloudstack.token`                           | `CLOUDSTACK_TOKEN`       | empty — bearer token, never logged/returned |
+| `cloudstack.ui-url`                          | `CLOUDSTACK_UI_URL`      | empty (no "New task" link)                |
 
 **Never embed a port in code.** Always pull from the port registry.
 
@@ -437,6 +443,21 @@ Assets are what we build; deployments are where they run. The `deployment` table
 | `POST /api/deployments/{id}/check`, `/retire`; `DELETE /api/deployments/{id}` | actions |
 
 Writes need `X-DevHub-Token` when `DEVHUB_REGISTRY_TOKEN` is set. Full reference — fields, status rules, reconcile, poller settings, curl examples — in **[docs/deployment-registry.md](docs/deployment-registry.md)**.
+
+### cloud-stack
+
+Each asset page has a **cloud-stack** tab and a **New task in cloud-stack** header button: what [cloud-stack](https://github.com/geekychris/cloud-stack) (the agent / SDLC platform) is doing on the asset's GitHub repo — open PRs with what they need and their checks, the latest Jenkins result, active and recent agent runs — and a link to start a new agent task there. The backend calls `GET /v1/repos/activity?repo=owner/name` on cloud-stack server-side (bearer token, 3 s timeout, 30 s cache per repo) and serves `GET /api/assets/{id}/cloudstack`; `GET /api/cloudstack/status` says whether it is configured and reachable. MCP: `asset_cloudstack_activity`.
+
+Configure with `CLOUDSTACK_API_URL`, `CLOUDSTACK_UI_URL` and `CLOUDSTACK_TOKEN`. On Kubernetes the token comes from the optional Secret `cloudstack-api-token` (key `token`); create it from cloud-stack's own Secret without printing it:
+
+```sh
+ssh spark.local "microk8s kubectl -n cloudstack get secret cloudstack-env -o jsonpath='{.data.API_BEARER_TOKEN}' | base64 -d \
+  | microk8s kubectl -n devportal create secret generic cloudstack-api-token --from-file=token=/dev/stdin \
+      --dry-run=client -o yaml | microk8s kubectl apply -f -"
+ssh spark.local 'microk8s kubectl -n devportal rollout restart deploy/devportal-backend'
+```
+
+Details in **[docs/cloudstack.md](docs/cloudstack.md)**.
 
 ### Asset catalog and onboarding
 
@@ -718,6 +739,7 @@ The MCP server (`mcp-server/`) is a Node + TypeScript stdio server that wraps th
 | `list_deployments`    | What is running where; filters, or `targetsOnly` for per-target counts.  |
 | `get_deployment`      | One deployment by id.                                                    |
 | `report_deployment`   | Upsert a deployment (auto-creates the asset); token from `DEVHUB_REGISTRY_TOKEN`. |
+| `asset_cloudstack_activity` | cloud-stack activity for an asset's repo: open PRs (needs, checks), latest Jenkins result, agent runs, `newTaskUrl`. |
 
 The server has no port and no state — every tool call is an HTTP request. Restart Claude Code after rebuilding the server (`pnpm build`) to pick up new tools.
 

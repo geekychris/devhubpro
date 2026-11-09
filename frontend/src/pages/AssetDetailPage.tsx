@@ -16,8 +16,9 @@ import { ChangesTab } from '../components/ChangesTab';
 import { FixturesTab } from '../components/FixturesTab';
 import { SpinupTab } from '../components/SpinupTab';
 import { AssetDeploymentsTab } from '../components/AssetDeploymentsTab';
+import { CloudStackTab, NewCloudStackTaskButton } from '../components/CloudStackTab';
 
-type Tab = 'overview' | 'deployments' | 'dependencies' | 'graph' | 'builds' | 'runtime' | 'cluster' | 'spinup' | 'analyze' | 'changes' | 'fixtures' | 'docs' | 'panels';
+type Tab = 'overview' | 'deployments' | 'cloud-stack' | 'dependencies' | 'graph' | 'builds' | 'runtime' | 'cluster' | 'spinup' | 'analyze' | 'changes' | 'fixtures' | 'docs' | 'panels';
 
 export function AssetDetailPage() {
   const { id = '' } = useParams();
@@ -31,7 +32,7 @@ export function AssetDetailPage() {
     function onGoto(e: Event) {
       const detail = (e as CustomEvent).detail as Tab;
       if (
-        detail === 'overview' || detail === 'deployments' || detail === 'dependencies' || detail === 'graph' ||
+        detail === 'overview' || detail === 'deployments' || detail === 'cloud-stack' || detail === 'dependencies' || detail === 'graph' ||
         detail === 'builds' || detail === 'runtime' || detail === 'cluster' ||
         detail === 'spinup' || detail === 'analyze' || detail === 'changes' ||
         detail === 'fixtures' || detail === 'docs' || detail === 'panels'
@@ -109,6 +110,7 @@ export function AssetDetailPage() {
         </div>
         <div className="flex gap-2">
           <AskClaudeButton assetId={a.id} />
+          <NewCloudStackTaskButton assetId={a.id} />
           <button
             onClick={() => setTab('spinup')}
             className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
@@ -136,7 +138,7 @@ export function AssetDetailPage() {
       {editing && <EditAssetForm asset={a} onClose={() => setEditing(false)} />}
 
       <nav className="flex gap-4 border-b border-gray-200 text-sm">
-        {(['overview', 'deployments', 'dependencies', 'graph', 'builds', 'runtime', 'cluster', 'spinup', 'analyze', 'changes', 'fixtures', 'docs', 'panels'] as const).map((t) => (
+        {(['overview', 'deployments', 'cloud-stack', 'dependencies', 'graph', 'builds', 'runtime', 'cluster', 'spinup', 'analyze', 'changes', 'fixtures', 'docs', 'panels'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -154,6 +156,8 @@ export function AssetDetailPage() {
       {tab === 'overview' && <AssetOverview asset={a} />}
 
       {tab === 'deployments' && <AssetDeploymentsTab assetId={a.id} />}
+
+      {tab === 'cloud-stack' && <CloudStackTab assetId={a.id} />}
 
       {tab === 'dependencies' && (
         <div className="space-y-4">

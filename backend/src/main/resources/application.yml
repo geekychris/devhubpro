@@ -87,6 +87,18 @@ devportal:
       allow-password: true
       generate-password-if-missing: true               # writes a one-time password file mode 0600 if no auth source is configured
 
+cloudstack:
+  # cloud-stack (agent / SDLC platform) link: the asset page's cloud-stack tab and
+  # GET /api/assets/{id}/cloudstack. Blank api-url = feature off.
+  # In-cluster on spark: http://cloudstack-api.cloudstack.svc.cluster.local:8080
+  api-url: ${CLOUDSTACK_API_URL:}
+  # Bearer token for the cloud-stack API (from Secret cloudstack-api-token). Never logged or returned.
+  token: ${CLOUDSTACK_TOKEN:}
+  # Public cloud-stack UI, for "New task" links, e.g. http://spark.tail8791ce.ts.net:30880
+  ui-url: ${CLOUDSTACK_UI_URL:}
+  timeout-ms: ${CLOUDSTACK_TIMEOUT_MS:3000}
+  cache-ttl-ms: ${CLOUDSTACK_CACHE_TTL_MS:30000}
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html

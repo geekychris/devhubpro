@@ -246,6 +246,16 @@ const tools = [
     },
   },
   {
+    name: 'asset_cloudstack_activity',
+    description:
+      "cloud-stack (the agent/SDLC platform) activity for an asset's GitHub repo: open PRs with what each needs and its checks (passing/failing/pending/none), the latest Jenkins result, active and recent agent runs (with links), and newTaskUrl - the cloud-stack page to start a new agent task on this repo. available=false with reasonCode (not-configured | no-github-repo | unreachable | unauthorized | bad-response) when it cannot be fetched; newTaskUrl may still be set.",
+    inputSchema: {
+      type: 'object',
+      properties: { assetId: { type: 'string', description: 'Asset id, e.g. devhubpro' } },
+      required: ['assetId'],
+    },
+  },
+  {
     name: 'get_deployment',
     description: 'Fetch one deployment by numeric id (from list_deployments).',
     inputSchema: {
@@ -401,6 +411,8 @@ async function dispatch(name: string, a: Record<string, unknown>): Promise<unkno
         includeRetired: Boolean(a.includeRetired),
       });
     }
+    case 'asset_cloudstack_activity':
+      return portal.assetCloudStackActivity(a.assetId as string);
     case 'get_deployment':
       return portal.getDeployment(a.id as number);
     case 'report_deployment': {
