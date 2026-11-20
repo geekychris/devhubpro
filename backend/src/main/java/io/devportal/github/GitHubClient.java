@@ -59,17 +59,18 @@ public class GitHubClient {
 
     /** List repos visible to the authenticated user, or for {@code owner} if specified. */
     public List<GitHubRepoSummary> listRepos(String owner) throws IOException {
-        List<GitHubRepoSummary> out = new ArrayList<>();
+        return listRepos(owner, null);
+    }
+
+    /** As {@link #listRepos(String)}, calling {@code progress} with the count so far after each page. */
+    public List<GitHubRepoSummary> listRepos(String owner, java.util.function.IntConsumer progress) throws IOException {
         Iterable<GHRepository> repos;
         if (owner == null || owner.isBlank()) {
-            repos = gh().getMyself().listRepositories().withPageSize(50);
+            repos = gh().getMyself().listRepositories().withPageSize(LIST_PAGE);
         } else {
-            repos = gh().getUser(owner).listRepositories().withPageSize(50);
+            repos = gh().getUser(owner).listRepositories().withPageSize(LIST_PAGE);
         }
-        for (GHRepository r : repos) {
-            out.add(toSummary(r));
-        }
-        return out;
+        return collect(repos, progress);
     }
 
     /**
@@ -82,8 +83,16 @@ public class GitHubClient {
      * </ol>
      */
     public List<GitHubRepoSummary> listOrgRepos(String owner) throws IOException {
+        return listOrgRepos(owner, null);
+    }
+
+    /**
+     * As {@link #listOrgRepos(String)}, calling {@code progress} with the count so far after each
+     * page. Listings leave out topics: GitHub serves them with one more request per repository,
+     * which made listing a few hundred repositories take minutes. {@link #getRepo} still has them.
+     */
+    public List<GitHubRepoSummary> listOrgRepos(String owner, java.util.function.IntConsumer progress) throws IOException {
         GitHub g = gh();
-        List<GitHubRepoSummary> out = new ArrayList<>();
 
         String myLogin = null;
         try {
@@ -93,20 +102,25 @@ public class GitHubClient {
         }
 
         if (owner != null && owner.equalsIgnoreCase(myLogin)) {
-            for (GHRepository r : g.getMyself().listRepositories().withPageSize(50)) {
-                out.add(toSummary(r));
-            }
-            return out;
+            return collect(g.getMyself().listRepositories().withPageSize(LIST_PAGE), progress);
         }
 
         try {
-            for (GHRepository r : g.getOrganization(owner).listRepositories().withPageSize(50)) {
-                out.add(toSummary(r));
-            }
-            return out;
+            return collect(g.getOrganization(owner).listRepositories().withPageSize(LIST_PAGE), progress);
         } catch (GHFileNotFoundException e) {
-            return listRepos(owner);
+            return listRepos(owner, progress);
         }
+    }
+
+    private static final int LIST_PAGE = 100;
+
+    private List<GitHubRepoSummary> collect(Iterable<GHRepository> repos, java.util.function.IntConsumer progress) throws IOException {
+        List<GitHubRepoSummary> out = new ArrayList<>();
+        for (GHRepository r : repos) {
+            out.add(toSummary(r, false));
+            if (progress != null && out.size() % LIST_PAGE == 0) progress.accept(out.size());
+        }
+        return out;
     }
 
     public GitHubRepoSummary getRepo(String fullName) throws IOException {
@@ -174,6 +188,11 @@ public class GitHubClient {
     public record ConnectionResult(boolean ok, String authenticatedAs, String message) {}
 
     private GitHubRepoSummary toSummary(GHRepository r) throws IOException {
+        return toSummary(r, true);
+    }
+
+    /** {@code withTopics} costs one more request per repository; listings pass false. */
+    private GitHubRepoSummary toSummary(GHRepository r, boolean withTopics) throws IOException {
         return new GitHubRepoSummary(
             r.getFullName(),
             r.getName(),
@@ -185,7 +204,7 @@ public class GitHubClient {
             r.isFork(),
             r.isArchived(),
             r.isPrivate(),
-            new ArrayList<>(r.listTopics()),
+            withTopics ? new ArrayList<>(r.listTopics()) : new ArrayList<>(),
             r.getPushedAt() == null ? null : r.getPushedAt().toInstant(),
             r.getLanguage()
         );

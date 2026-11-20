@@ -55,8 +55,14 @@ public class BulkImportController {
     }
 
     @PostMapping("/api/import-jobs/{id}/cancel")
-    public ResponseEntity<Void> cancel(@PathVariable String id, @RequestParam(required = false) String reason) {
-        // Cooperative cancellation not yet supported; placeholder for future iteration.
-        return ResponseEntity.status(501).build();
+    public ResponseEntity<ImportJob> cancel(@PathVariable long id, @RequestParam(required = false) String reason) {
+        ImportJob j = bulk.get(id);
+        if (j == null) {
+            throw new io.devportal.asset.error.NotFoundException("Import job " + id + " not found");
+        }
+        if (!bulk.cancel(id, reason)) {
+            return ResponseEntity.status(409).body(j); // already finished
+        }
+        return ResponseEntity.accepted().body(bulk.get(id));
     }
 }

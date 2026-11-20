@@ -14,7 +14,22 @@ export function BulkImportPage() {
   const [skipForks, setSkipForks] = useState(true);
   const [cloneAndAnalyze, setCloneAndAnalyze] = useState(true);
   const [autoWire, setAutoWire] = useState(true);
-  const [activeJobId, setActiveJobId] = useState<number | null>(null);
+  const [chosenJobId, setActiveJobId] = useState<number | null>(null);
+
+  // Jobs run on the server: coming back to the page shows the one still running.
+  const jobs = useQuery({
+    queryKey: ['import-jobs'],
+    queryFn: api.listImportJobs,
+    refetchInterval: (q) => {
+      const data = q.state.data as ImportJob[] | undefined;
+      return data?.some((j) => j.status === 'running' || j.status === 'queued') ? 3000 : false;
+    },
+  });
+  // The job shown: the one picked, else the one running, else the latest.
+  const activeJobId = chosenJobId
+    ?? jobs.data?.find((j) => j.status === 'running' || j.status === 'queued')?.id
+    ?? jobs.data?.[0]?.id
+    ?? null;
 
   const preview = useQuery({
     queryKey: ['org-repos', owner],
@@ -36,6 +51,7 @@ export function BulkImportPage() {
     onSuccess: (j) => {
       setActiveJobId(j.id);
       queryClient.invalidateQueries({ queryKey: ['assets'] });
+      queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
     },
   });
 
@@ -132,7 +148,8 @@ export function BulkImportPage() {
           </button>
           <button
             onClick={() => start.mutate()}
-            disabled={start.isPending}
+            disabled={start.isPending || jobs.data?.some((j) => j.status === 'running' || j.status === 'queued')}
+            title={jobs.data?.some((j) => j.status === 'running' || j.status === 'queued') ? 'An import is already running' : undefined}
             className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
           >
             {start.isPending ? 'Starting…' : 'Run import'}
@@ -160,12 +177,35 @@ export function BulkImportPage() {
         </section>
       )}
 
+      {jobs.data && jobs.data.length > 1 && (
+        <section className="rounded border border-gray-200 bg-white p-3 text-xs">
+          <span className="mr-2 font-medium text-gray-700">Jobs</span>
+          {jobs.data.map((j) => (
+            <button
+              key={j.id}
+              onClick={() => setActiveJobId(j.id)}
+              className={`mr-2 rounded px-2 py-0.5 ${j.id === activeJobId ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+            >
+              #{j.id} {j.owner} · {j.status}
+            </button>
+          ))}
+        </section>
+      )}
+
       {activeJobId !== null && <JobView id={activeJobId} />}
     </div>
   );
 }
 
 function JobView({ id }: { id: number }) {
+  const queryClient = useQueryClient();
+  const cancel = useMutation({
+    mutationFn: () => api.cancelImportJob(id),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['import-job', id] });
+      queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
+    },
+  });
   const job = useQuery({
     queryKey: ['import-job', id],
     queryFn: () => api.getImportJob(id),
@@ -178,23 +218,45 @@ function JobView({ id }: { id: number }) {
   if (!job.data) return null;
   const j = job.data;
   const pct = j.totalMatched > 0 ? Math.round((j.processed / j.totalMatched) * 100) : 0;
+  const active = j.status === 'running' || j.status === 'queued';
+  const cancelling = active && j.log.some((l) => l.includes('Cancel requested'));
 
   return (
     <section className="rounded border border-gray-200 bg-white p-4 text-sm">
       <header className="mb-2 flex items-center justify-between">
         <h2 className="text-sm font-medium text-gray-900">Import job #{j.id}</h2>
+        <span className="flex items-center gap-2">
+        {active && (
+          <button
+            onClick={() => cancel.mutate()}
+            disabled={cancel.isPending || cancelling}
+            className="rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+          >
+            {cancelling ? 'Cancelling…' : 'Cancel'}
+          </button>
+        )}
         <span
           className={`rounded px-2 py-0.5 text-xs font-medium ${
             j.status === 'succeeded'
               ? 'bg-green-100 text-green-800'
               : j.status === 'failed'
               ? 'bg-red-100 text-red-800'
+              : j.status === 'cancelled'
+              ? 'bg-gray-100 text-gray-700'
               : 'bg-blue-100 text-blue-800 animate-pulse'
           }`}
         >
           {j.status}
         </span>
+        </span>
       </header>
+
+      {active && (
+        <p className="mb-2 text-sm text-gray-800">
+          <span className="font-medium">Now:</span> {j.phase}
+          {j.totalMatched === 0 && ' — listing and filtering come before anything is registered; a few hundred repos take a minute or two.'}
+        </p>
+      )}
 
       <div className="mb-2 grid grid-cols-3 gap-x-3 text-xs">
         <Stat label="matched" value={j.totalMatched} />
@@ -221,7 +283,7 @@ function JobView({ id }: { id: number }) {
         </div>
       </details>
 
-      <details className="mt-2 text-xs">
+      <details open={j.results.length === 0} className="mt-2 text-xs">
         <summary className="cursor-pointer text-gray-700">Log ({j.log.length} lines)</summary>
         <pre className="mt-1 max-h-72 overflow-auto rounded bg-gray-900 px-2 py-2 text-gray-100 whitespace-pre-wrap">
           {j.log.join('\n')}
