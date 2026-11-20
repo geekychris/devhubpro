@@ -419,7 +419,9 @@ export type ImportJob = {
   id: number;
   owner: string;
   request: BulkImportRequest;
-  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  /** What it is doing now: "listing (200 so far)", "filtering: languages 40/120", "importing 3/58"… */
+  phase: string;
   startedAt: string | null;
   finishedAt: string | null;
   currentRepo: string | null;
@@ -823,6 +825,7 @@ export const api = {
     }),
   getImportJob: (id: number) => request<ImportJob>(`/api/import-jobs/${id}`),
   listImportJobs: () => request<ImportJob[]>('/api/import-jobs'),
+  cancelImportJob: (id: number) => request<ImportJob>(`/api/import-jobs/${id}/cancel`, { method: 'POST' }),
 
   // ---- settings ----
   getGitHubToken: () => request<GitHubTokenInfo>('/api/settings/github'),

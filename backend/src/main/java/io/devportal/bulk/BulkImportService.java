@@ -65,6 +65,14 @@ public class BulkImportService {
     }
 
     public ImportJob start(String owner, BulkImportRequest request) {
+        // The same import already queued or running (a second click, a second tab) is that job,
+        // not another one cloning the same repositories into the same workspaces.
+        for (MutableJob j : jobs.values()) {
+            if (("queued".equals(j.status) || "running".equals(j.status)) && !j.cancelled
+                && j.owner.equalsIgnoreCase(owner) && j.request.equals(request)) {
+                return snapshot(j);
+            }
+        }
         long id = nextId.getAndIncrement();
         MutableJob job = new MutableJob(id, owner, request);
         jobs.put(id, job);
@@ -85,27 +93,60 @@ public class BulkImportService {
             .toList();
     }
 
+    /**
+     * Asks a job to stop. It stops at the next repository (or language check): the repository
+     * being imported finishes first. Returns false for an unknown or finished job.
+     */
+    public boolean cancel(long id, String reason) {
+        MutableJob j = jobs.get(id);
+        if (j == null || !("queued".equals(j.status) || "running".equals(j.status))) return false;
+        j.cancelled = true;
+        j.append("Cancel requested" + (reason == null || reason.isBlank() ? "" : ": " + reason)
+            + "; stopping after the current step.");
+        return true;
+    }
+
+    /** Thrown inside a job when it was cancelled. */
+    private static final class Cancelled extends RuntimeException {
+        Cancelled() { super("cancelled", null, false, false); }
+    }
+
+    private static void checkCancelled(MutableJob job) {
+        if (job.cancelled) throw new Cancelled();
+    }
+
     private void run(MutableJob job) {
         job.status = "running";
         job.startedAt = Instant.now();
         try {
-            job.append("Listing repos in " + job.owner + " (this can take 30-60s for large orgs)…");
-            List<GitHubRepoSummary> all = github.listOrgRepos(job.owner);
+            job.phase = "listing";
+            job.append("Listing repos in " + job.owner + "…");
+            List<GitHubRepoSummary> all = github.listOrgRepos(job.owner, n -> {
+                job.phase = "listing (" + n + " so far)";
+                job.append("  listed " + n + " so far…");
+            });
             job.append("Listed " + all.size() + " repos for " + job.owner);
+            checkCancelled(job);
 
-            List<GitHubRepoSummary> matched = filter(all, job.request);
+            job.phase = "filtering";
+            List<GitHubRepoSummary> matched = filter(all, job.request, job);
             job.totalMatched = matched.size();
             job.append("Filtered to " + matched.size() + " repos matching criteria");
 
+            job.phase = "importing";
             for (GitHubRepoSummary repo : matched) {
+                checkCancelled(job);
                 job.currentRepo = repo.fullName();
+                job.phase = "importing " + (job.processed + 1) + "/" + matched.size();
                 processOne(job, repo);
                 job.processed++;
             }
 
             if (Boolean.TRUE.equals(job.request.autoWireMavenDeps())) {
+                job.phase = "auto-wiring";
                 job.append("Auto-wiring Maven dependencies across imported assets…");
                 for (var entry : new ArrayList<>(job.results)) {
+                    checkCancelled(job);
                     String assetId = (String) entry.get("assetId");
                     if (assetId == null) continue;
                     try {
@@ -122,10 +163,17 @@ public class BulkImportService {
             }
 
             job.currentRepo = null;
+            job.phase = "done";
             job.status = "succeeded";
+        } catch (Cancelled c) {
+            job.currentRepo = null;
+            job.phase = "cancelled";
+            job.status = "cancelled";
+            job.append("Cancelled after " + job.processed + " of " + job.totalMatched + " repos.");
         } catch (Exception e) {
             log.error("Bulk import {} failed", job.id, e);
             job.error = e.getMessage();
+            job.phase = "failed";
             job.status = "failed";
         } finally {
             job.finishedAt = Instant.now();
@@ -184,7 +232,7 @@ public class BulkImportService {
         job.results.add(entry);
     }
 
-    private List<GitHubRepoSummary> filter(List<GitHubRepoSummary> repos, BulkImportRequest req) {
+    private List<GitHubRepoSummary> filter(List<GitHubRepoSummary> repos, BulkImportRequest req, MutableJob job) {
         boolean skipArchived = req.skipArchived() == null || req.skipArchived();
         boolean skipForks = req.skipForks() == null || req.skipForks();
         List<String> langs = req.languages() == null ? List.of()
@@ -196,35 +244,79 @@ public class BulkImportService {
         //   keep = (language matches)  OR  (include pattern matches)
         //   then minus exclude pattern, archived (if skip), forks (if skip).
         // If neither languages nor includePatterns is set, keep everything (subject to exclude).
-        List<GitHubRepoSummary> out = new ArrayList<>();
+        boolean filtersDefined = !langs.isEmpty() || !include.isEmpty();
+        Map<String, Boolean> keep = new LinkedHashMap<>();
+        List<GitHubRepoSummary> needLanguages = new ArrayList<>();
         for (GitHubRepoSummary r : repos) {
             if (skipArchived && r.archived()) continue;
             if (skipForks && r.fork()) continue;
             if (!exclude.isEmpty() && exclude.stream().anyMatch(p -> p.matcher(r.name()).find())) continue;
-
-            boolean filtersDefined = !langs.isEmpty() || !include.isEmpty();
-            if (!filtersDefined) { out.add(r); continue; }
+            if (!filtersDefined) { keep.put(r.fullName(), true); continue; }
 
             boolean languageHit = !langs.isEmpty() && r.primaryLanguage() != null
                 && langs.contains(r.primaryLanguage().toLowerCase(Locale.ROOT));
-            // GitHub's primaryLanguage is just "biggest byte share". A single CUDA file, big
-            // notebook, or vendored asset can flip it. When the primary doesn't match the user's
-            // language filter, do one extra listLanguages call and accept the repo if any
-            // requested language appears at all. One call per missed-primary repo.
-            if (!languageHit && !langs.isEmpty()) {
-                try {
-                    var allLangs = github.languagesOf(r.fullName());
-                    languageHit = langs.stream().anyMatch(allLangs::contains);
-                } catch (IOException ignored) {
-                    // network blip / 404 — fall through to the include-pattern check
-                }
-            }
-            boolean includeHit  = !include.isEmpty()
+            boolean includeHit = !include.isEmpty()
                 && include.stream().anyMatch(p -> p.matcher(r.name()).find());
-            if (languageHit || includeHit) out.add(r);
+            if (languageHit || includeHit) {
+                keep.put(r.fullName(), true);
+            } else if (!langs.isEmpty() && r.primaryLanguage() != null) {
+                // GitHub's primaryLanguage is just "biggest byte share". A single CUDA file, big
+                // notebook, or vendored asset can flip it: ask for all its languages and accept
+                // the repo if any requested one appears. (No primary language means GitHub found
+                // no code at all, so there is nothing to ask about.)
+                needLanguages.add(r);
+            }
+        }
+
+        if (!needLanguages.isEmpty()) {
+            job.append("Checking all languages of " + needLanguages.size()
+                + " repos whose main language is not selected…");
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(LANGUAGE_CHECKS);
+            java.util.concurrent.atomic.AtomicInteger done = new java.util.concurrent.atomic.AtomicInteger();
+            Map<String, Boolean> hits = new ConcurrentHashMap<>();
+            try {
+                List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+                for (GitHubRepoSummary r : needLanguages) {
+                    futures.add(pool.submit(() -> {
+                        if (job.cancelled) return;
+                        try {
+                            var allLangs = github.languagesOf(r.fullName());
+                            if (langs.stream().anyMatch(allLangs::contains)) hits.put(r.fullName(), true);
+                        } catch (IOException ignored) {
+                            // network blip / 404: not kept
+                        }
+                        int n = done.incrementAndGet();
+                        job.phase = "filtering: languages " + n + "/" + needLanguages.size();
+                        if (n % 25 == 0) job.append("  checked " + n + "/" + needLanguages.size() + "…");
+                    }));
+                }
+                for (var f : futures) {
+                    try {
+                        f.get();
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new Cancelled();
+                    } catch (java.util.concurrent.ExecutionException ignored) {
+                        // counted as not kept
+                    }
+                }
+            } finally {
+                pool.shutdownNow();
+            }
+            checkCancelled(job);
+            job.append("  " + hits.size() + " of them use a selected language");
+            keep.putAll(hits);
+        }
+
+        List<GitHubRepoSummary> out = new ArrayList<>();
+        for (GitHubRepoSummary r : repos) {
+            if (keep.containsKey(r.fullName())) out.add(r);
         }
         return out;
     }
+
+    /** Language lookups run this many at a time. */
+    private static final int LANGUAGE_CHECKS = 8;
 
     private List<Pattern> compile(List<String> patterns) {
         if (patterns == null) return List.of();
@@ -244,7 +336,7 @@ public class BulkImportService {
 
     private ImportJob snapshot(MutableJob j) {
         return new ImportJob(
-            j.id, j.owner, j.request, j.status, j.startedAt, j.finishedAt, j.currentRepo,
+            j.id, j.owner, j.request, j.status, j.phase, j.startedAt, j.finishedAt, j.currentRepo,
             j.totalMatched, j.processed, j.registered, j.alreadyRegistered,
             j.analyzed, j.autoWired,
             new ArrayList<>(j.logLines), new ArrayList<>(j.results), j.error
@@ -256,6 +348,8 @@ public class BulkImportService {
         final String owner;
         final BulkImportRequest request;
         volatile String status = "queued";
+        volatile String phase = "queued";
+        volatile boolean cancelled;
         volatile Instant startedAt;
         volatile Instant finishedAt;
         volatile String currentRepo;

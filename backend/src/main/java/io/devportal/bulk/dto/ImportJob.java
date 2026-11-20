@@ -8,7 +8,8 @@ public record ImportJob(
     long id,
     String owner,
     BulkImportRequest request,
-    String status,            // "queued" | "running" | "succeeded" | "failed"
+    String status,            // "queued" | "running" | "succeeded" | "failed" | "cancelled"
+    String phase,             // what it is doing: "listing (200 so far)", "filtering: languages 40/120", "importing 3/58"…
     Instant startedAt,
     Instant finishedAt,
     String currentRepo,       // what we're processing right now
